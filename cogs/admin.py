@@ -1,4 +1,4 @@
-﻿import os
+import os
 import tempfile
 from datetime import datetime
 import discord
@@ -85,12 +85,12 @@ def _build_reset_embed() -> discord.Embed:
         timestamp=datetime.utcnow()
     )
     embed.add_field(name="📋 Co wyczyszczono", value=(
-        "> • clubs · players · pplications\n"
-        "> • 	ransfer_history · ree_agents\n"
-        "> • Licznik ticketow → #001\n"
+        "> • `clubs` · `players` · `applications`\n"
+        "> • `transfer_history` · `free_agents`\n"
+        "> • Licznik ticketów → `#001`\n"
         "> • Rynek transferowy → **OTWARTY**"
     ), inline=False)
-    embed.set_footer(text=f"Liga Federacji • {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    embed.set_footer(text=f"Federacja Siatkówki Stołowej (FSS) • {datetime.now().strftime('%d.%m.%Y %H:%M')}")
     return embed
 
 

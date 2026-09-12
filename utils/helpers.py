@@ -33,6 +33,61 @@ def extract_ids(text: str) -> list:
 def safe_thread_name(name: str) -> str:
     return name[:100]
 
+def clean_player_name(raw_name: str, discord_id: int = None) -> str:
+    """Oczyszcza nazwę gracza z surowych wzmianek <@123456>, przydatne przy tytułach i bazach."""
+    if not raw_name:
+        return f"Zawodnik_{discord_id}" if discord_id else "Nieznany"
+    cleaned = re.sub(r'<@!?\d+>', '', str(raw_name)).strip("()[]\"' ")
+    if not cleaned:
+        return f"Zawodnik_{discord_id}" if discord_id else "Zawodnik"
+    return cleaned
+
+async def resolve_player_identity(guild: discord.Guild, text: str, client: discord.Client = None) -> tuple[str, int | None, str]:
+    """
+    Rozpoznaje tożsamość zawodnika z wpisanego tekstu / wzmianki (np. @Zawodnik).
+    Zwraca: (clean_name, discord_id, display_label)
+
+    - clean_name: czysta nazwa/nick do tytułów embedów, wątków forum i bazy (np. "JanKowalski", NIGDY <@123>)
+    - discord_id: int lub None
+    - display_label: tekst do embeda (np. "**JanKowalski** (<@123456>)" lub "**JanKowalski** *(Brak konta Discord)*")
+    """
+    if not text:
+        return "Nieznany", None, "Nieznany"
+
+    text = str(text).strip()
+    extracted = extract_ids(text)
+
+    # Sprawdź czy wpisano samo ID numeryczne użytkownika
+    if not extracted and text.isdigit() and len(text) >= 15:
+        extracted = [int(text)]
+
+    if extracted:
+        dc_id = extracted[0]
+        cleaned_text = re.sub(r'<@!?\d+>', '', text).strip("()[]\"' ")
+
+        member_name = None
+        if guild:
+            member = await get_or_fetch_member(guild, dc_id)
+            if member:
+                member_name = member.display_name or getattr(member, 'global_name', None) or member.name
+
+        if not member_name and client:
+            try:
+                u = await client.fetch_user(dc_id)
+                member_name = getattr(u, 'global_name', None) or u.display_name or u.name
+            except Exception:
+                pass
+
+        clean_name = cleaned_text or member_name or f"Zawodnik_{dc_id}"
+        clean_name = re.sub(r'<@!?\d+>', '', clean_name).strip("()[]\"' ") or member_name or f"Zawodnik_{dc_id}"
+        display_label = f"**{clean_name}** (<@{dc_id}>)"
+        return clean_name, dc_id, display_label
+
+    clean_name = re.sub(r'<@!?\d+>', '', text).strip("()[]\"' ") or text
+    display_label = f"**{clean_name}** *(Brak konta Discord)*"
+    return clean_name, None, display_label
+
+
 def is_federation(member: discord.Member) -> bool:
     if not member or not hasattr(member, "roles"): return False
     # Dynamiczny ID roli (DB → env fallback)
@@ -249,8 +304,9 @@ def build_market_status_embed() -> discord.Embed:
     if not close_at and not open_at:
         embed.add_field(name="📅 Harmonogram", value="*Brak zaplanowanych automatycznych zmian statusu.*", inline=False)
 
-    embed.set_footer(text="Liga Federacji • Okienko Transferowe")
+    embed.set_footer(text="Federacja Siatkówki Stołowej (FSS) • Okienko Transferowe")
     return embed
+
 
 
 async def announce_market_change(client: discord.Client, message: str, guild: discord.Guild = None):

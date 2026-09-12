@@ -1,15 +1,19 @@
-# ROADMAP — Bot Ligi Piłkarskiej Discord
+# ROADMAP — Bot Federacji Siatkówki Stołowej (FSS)
 
 ## Opis projektu
-Bot Discord zarządzający ligą piłkarską. Obsługuje rejestrację klubów i zawodników, transfery, wypożyczenia, kontrakty i rynek transferowy. Baza: SQLite (liga.db). Hosting: bot-hosting.net (Docker, Python 3.14).
+Bot Discord zarządzający Federacją Siatkówki Stołowej (w skrócie FSS). Obsługuje rejestrację klubów i zawodników, transfery, wypożyczenia, kontrakty i rynek transferowy. Baza: SQLite (liga.db). Hosting: bot-hosting.net (Docker, Python 3.14).
 
 ## Architektura plików
 
 ### `config.py`
 Konfiguracja środowiskowa — tokeny, ID ról i kanałów Discord, limity ligi. Czyta z .env lub zmiennych środowiskowych. NIE importuje bazy danych.
 
+### `utils/league_config.py`
+Dynamiczna konfiguracja FSS (DB-first z fallbackiem na env). Zapewnia natychmiastowe zmiany w locie bez restartu bota dla limitów graczy, kanałów, ról i nazwy organizacji.
+
 ### `main.py`
 Punkt wejścia bota. Inicjalizuje discord.py Bot, ładuje rozszerzenia (Cogs), rejestruje trwałe widoki (Views) z bazy danych, uruchamia zadanie tła. Zawiera tylko `!setup_panel` i `on_ready`.
+
 
 ### `database/` — moduł bazy danych
 - `core.py` — połączenie SQLite, definicje tabel, migracje, reset sezonu, backup, statystyki
@@ -76,9 +80,12 @@ Funkcje pomocnicze:
 - CHANNEL_KOMUNIKATY_ID — kanał z oficjalnymi komunikatami ligi (config.py)
 
 ## Tryby używania (cheat sheet)
-- `!setup_panel` — wysyła panele (Biuro Federacji + Rynek) do kanału
-- `/reset` lub `!reset_sezon` — reset bazy na nowy sezon (admin/federacja)
-- `/rynek otworz` lub `!rynek otworz` — otwarcie rynku transferowego
-- `/rynek zaplanuj_zamkniecie 20.09.2026 18:00` — planowe zamknięcie
+- `!setup_panel` — wysyła panele FSS (Biuro Federacji + Rynek) do kanału
+- `/reset` lub `!reset` — reset bazy na nowy sezon (admin/federacja)
+- `/setup panel` — interaktywny panel administracyjny z przyciskami (rynek, status)
+- `/setup liga max_graczy <liczba>` — dynamiczna zmiana limitu zawodników w klubie
+- `/setup rynek otworz / zamknij / zaplanuj_zamkniecie / zaplanuj_otwarcie` — rynek transferowy
+- `!rynek` — szybki podgląd statusu rynku
 - `!backup_db` — eksport bazy SQLite jako plik
-- `!db_stats` — statystyki ligi
+- `!db_stats` — statystyki bazy
+

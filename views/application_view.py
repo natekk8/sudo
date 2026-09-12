@@ -2,9 +2,11 @@ import discord
 from discord import ui
 import database
 from config import ROLE_FEDERACJA_ID, ROLA_WZORZEC_ID, CHANNEL_KOMUNIKATY_ID, MAX_PLAYERS_PER_CLUB
+import utils.league_config as league_config
 from utils.helpers import (
     is_federation, is_club_board_or_owner, extract_ids, clean_tag,
-    send_dm, format_expiry_discord, get_or_fetch_member
+    send_dm, format_expiry_discord, get_or_fetch_member,
+    clean_player_name, get_komunikaty_channel
 )
 
 _HISTORY_EMOJIS = {
@@ -228,7 +230,7 @@ class ForumApplicationView(ui.View):
 
         app_type = app.get("type")
         guild = interaction.guild
-        kom_channel = guild.get_channel(CHANNEL_KOMUNIKATY_ID)
+        kom_channel = await get_komunikaty_channel(interaction.client, guild)
 
         try:
             await self._execute_accept(interaction, app, app_type, guild, kom_channel)
@@ -286,8 +288,8 @@ class ForumApplicationView(ui.View):
 
             if kom_channel:
                 embed_kom = discord.Embed(
-                    title="📢 Nowy Klub w Lidze",
-                    description=f"Zespół **{nazwa}** (`{skrot}`) został pomyślnie zarejestrowany!",
+                    title="📢 Nowy Klub w Federacji (FSS)",
+                    description=f"Zespół **{nazwa}** (`{skrot}`) został pomyślnie zarejestrowany w Federacji Siatkówki Stołowej (FSS)!",
                     color=0x2ecc71
                 )
                 await kom_channel.send(embed=embed_kom)
@@ -295,10 +297,10 @@ class ForumApplicationView(ui.View):
         # ─── PODPISANIE ───
         elif app_type == "PODPISANIE":
             target_club = clean_tag(app.get("target_club"))
-            if database.get_club_player_count(target_club) >= MAX_PLAYERS_PER_CLUB:
+            if database.get_club_player_count(target_club) >= league_config.max_players():
                 database.revert_application_status(self.app_id)
                 return await interaction.followup.send(
-                    f"❌ Klub `{target_club}` osiągnął limit {MAX_PLAYERS_PER_CLUB}/{MAX_PLAYERS_PER_CLUB} graczy!", ephemeral=True)
+                    f"❌ Klub `{target_club}` osiągnął limit {league_config.max_players()}/{league_config.max_players()} graczy!", ephemeral=True)
 
             gracz = app.get("player_name")
             dc_id = app.get("player_discord_id")
@@ -323,7 +325,8 @@ class ForumApplicationView(ui.View):
 
             embed = interaction.message.embeds[0]
             embed.color = 0x2ecc71
-            embed.title = f"✅ PODPISANIE: {gracz}"
+            clean_n = clean_player_name(gracz, dc_id)
+            embed.title = f"✅ PODPISANIE: {clean_n}"
             for i, f in enumerate(embed.fields):
                 if f.name == "Status":
                     embed.set_field_at(i, name="Status",
@@ -346,10 +349,10 @@ class ForumApplicationView(ui.View):
         elif app_type == "TRANSFER":
             target_club = clean_tag(app.get("target_club"))
             source_club = clean_tag(app.get("source_club"))
-            if database.get_club_player_count(target_club) >= MAX_PLAYERS_PER_CLUB:
+            if database.get_club_player_count(target_club) >= league_config.max_players():
                 database.revert_application_status(self.app_id)
                 return await interaction.followup.send(
-                    f"❌ Klub `{target_club}` jest już pełny ({MAX_PLAYERS_PER_CLUB}/{MAX_PLAYERS_PER_CLUB})!", ephemeral=True)
+                    f"❌ Klub `{target_club}` jest już pełny ({league_config.max_players()}/{league_config.max_players()})!", ephemeral=True)
 
             gracz = app.get("player_name")
             dc_id = app.get("player_discord_id")
@@ -382,7 +385,8 @@ class ForumApplicationView(ui.View):
 
             embed = interaction.message.embeds[0]
             embed.color = 0x2ecc71
-            embed.title = f"✅ TRANSFER: {gracz}"
+            clean_n = clean_player_name(gracz, dc_id)
+            embed.title = f"✅ TRANSFER: {clean_n}"
             for i, f in enumerate(embed.fields):
                 if f.name == "Status":
                     embed.set_field_at(i, name="Status",
@@ -406,10 +410,10 @@ class ForumApplicationView(ui.View):
         elif app_type == "WYPOZYCZENIE":
             target_club = clean_tag(app.get("target_club"))
             source_club = clean_tag(app.get("source_club"))
-            if database.get_club_player_count(target_club) >= MAX_PLAYERS_PER_CLUB:
+            if database.get_club_player_count(target_club) >= league_config.max_players():
                 database.revert_application_status(self.app_id)
                 return await interaction.followup.send(
-                    f"❌ Klub `{target_club}` jest już pełny ({MAX_PLAYERS_PER_CLUB}/{MAX_PLAYERS_PER_CLUB})!", ephemeral=True)
+                    f"❌ Klub `{target_club}` jest już pełny ({league_config.max_players()}/{league_config.max_players()})!", ephemeral=True)
 
             gracz = app.get("player_name")
             dc_id = app.get("player_discord_id")
@@ -449,7 +453,8 @@ class ForumApplicationView(ui.View):
 
             embed = interaction.message.embeds[0]
             embed.color = 0x2ecc71
-            embed.title = f"✅ WYPOŻYCZENIE: {gracz}"
+            clean_n = clean_player_name(gracz, dc_id)
+            embed.title = f"✅ WYPOŻYCZENIE: {clean_n}"
             for i, f in enumerate(embed.fields):
                 if f.name == "Status":
                     embed.set_field_at(i, name="Status",
@@ -481,7 +486,8 @@ class ForumApplicationView(ui.View):
 
             embed = interaction.message.embeds[0]
             embed.color = 0x2ecc71
-            embed.title = f"✅ ANEKS: {gracz}"
+            clean_n = clean_player_name(gracz, dc_id)
+            embed.title = f"✅ ANEKS: {clean_n}"
             embed.add_field(name="Decyzja Federacji",
                             value=f"Zatwierdzono przez {interaction.user.mention}.", inline=False)
             await interaction.message.edit(embed=embed, view=None)
@@ -522,15 +528,18 @@ class ForumApplicationView(ui.View):
             embed = interaction.message.embeds[0]
             embed.color = 0xe67e22
             tryb = "dyscyplinarnie" if app_type == "ROZWIAZANIE_DYSCYPLINARNE" else "za porozumieniem stron"
-            embed.title = f"✅ ROZWIĄZANIE UMOWY ({tryb.upper()}): {gracz}"
+            clean_n = clean_player_name(gracz, dc_id)
+            embed.title = f"✅ ROZWIĄZANIE UMOWY ({tryb.upper()}): {clean_n}"
             embed.add_field(name="Decyzja Federacji",
                             value=f"Zatwierdzone przez {interaction.user.mention}.", inline=False)
             await interaction.message.edit(embed=embed, view=None)
 
             if kom_channel:
                 c_nazwa = c_source.get("name", source_club) if c_source else source_club
+                clean_n = clean_player_name(gracz, dc_id)
+                p_mention = f"**{clean_n}** (<@{dc_id}>)" if dc_id else f"**{clean_n}**"
                 await kom_channel.send(
-                    f"📢 Kontrakt zawodnika **{gracz}** z **{c_nazwa}** (`{source_club}`) został rozwiązany ({tryb}).",
+                    f"📢 **ROZWIĄZANIE UMOWY (FSS):** Kontrakt zawodnika {p_mention} z klubem **{c_nazwa}** (`{source_club}`) został rozwiązany ({tryb}).",
                     allowed_mentions=discord.AllowedMentions.none()
                 )
             if dc_id:

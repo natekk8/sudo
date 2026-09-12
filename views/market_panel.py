@@ -2,7 +2,9 @@ import discord
 from discord import ui
 import database
 from config import MAX_PLAYERS_PER_CLUB
-from utils.helpers import build_squad_bar, format_expiry_discord
+import utils.league_config as league_config
+from utils.helpers import build_squad_bar, format_expiry_discord, clean_player_name
+
 
 _MAX_DISPLAY_AGENTS = 25
 
@@ -62,12 +64,13 @@ class KlubSelectPage(ui.Select):
         count = len(players)
 
         embed = discord.Embed(title=f"⚽ {club['name']} (`{val}`)", color=0x2b2d31)
-        embed.add_field(name="Skład kadry", value=build_squad_bar(count, MAX_PLAYERS_PER_CLUB), inline=False)
+        embed.add_field(name="Skład kadry", value=build_squad_bar(count, league_config.max_players()), inline=False)
 
         if players:
             lines = []
             for p in players:
-                name_d = f"<@{p['discord_id']}>" if p.get("discord_id") else f"**{p['name']}**"
+                clean_n = clean_player_name(p.get("name", ""), p.get("discord_id"))
+                name_d = f"**{clean_n}** (<@{p['discord_id']}>)" if p.get("discord_id") else f"**{clean_n}**"
                 typ = "⏱️ Wyp." if p.get("contract_type") == "WYPOZYCZENIE" else "📄"
                 expires = format_expiry_discord(p.get("expires_at"))
                 klauz = p.get("clause", "Brak")
@@ -84,8 +87,9 @@ class KlubSelectPage(ui.Select):
             if board_info:
                 embed.add_field(name="Władze klubu", value="\n".join(board_info), inline=False)
 
-        embed.set_footer(text="Rynek Transferowy · Liga")
+        embed.set_footer(text=f"Rynek Transferowy • {league_config.league_name()}")
         await interaction.response.edit_message(embed=embed, view=None)
+
 
 
 class WidokRynkuTransferowego(ui.View):

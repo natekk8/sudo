@@ -9,10 +9,12 @@ import utils.league_config as league_config
 from utils.helpers import (
     clean_tag, is_valid_tag, extract_ids, parse_expiry_date,
     parse_amount, validate_amount_input, is_club_board_or_owner,
-    ping_representatives, send_dm, has_open_ticket, safe_thread_name, get_now_warsaw
+    ping_representatives, send_dm, has_open_ticket, safe_thread_name, get_now_warsaw,
+    resolve_player_identity, clean_player_name
 )
 from views.confirmation import WniosekConfirmView
 from views.application_view import ForumApplicationView
+
 
 
 
@@ -85,7 +87,7 @@ async def proces_rejestracji_klubu(interaction: discord.Interaction):
     try:
         await interaction.followup.send(f"KanaĹ‚: {kanal.mention}", ephemeral=True)
         embed_start = discord.Embed(title="đźŹ›ď¸Ź Rejestracja Nowego Klubu", description=f"Witaj {user.mention}! Bot poprowadzi CiÄ™ przez proces.\n> Masz **15 minut** na kaĹĽdÄ… odpowiedĹş.", color=0x2b2d31)
-        embed_start.set_footer(text="Liga Federacji â€˘ Biuro")
+        embed_start.set_footer(text=f"{league_config.league_name()} • Biuro")
         await kanal.send(embed=embed_start)
 
         nazwa = await _zadaj_pytanie(kanal, user, "Podaj peĹ‚nÄ… nazwÄ™ druĹĽyny (np. FC Ĺazy):", client)
@@ -168,66 +170,71 @@ async def proces_podpisania(interaction: discord.Interaction):
             else:
                 break
 
-        gracz = await _zadaj_pytanie(kanal, user, "Oznacz @Zawodnika (lub wpisz imiÄ™ jeĹ›li brak DC):", client)
-        extracted = extract_ids(gracz)
-        player_dc_id = extracted[0] if extracted else None
+        gracz_input = await _zadaj_pytanie(kanal, user, "Oznacz @Zawodnika (lub wpisz imię jeśli brak DC):", client)
+        clean_name, player_dc_id, player_label = await resolve_player_identity(guild, gracz_input, client)
 
-        # Blokada kradzieĹĽy: zawodnik nie moĹĽe juĹĽ mieÄ‡ kontraktu
-        existing = database.is_player_under_contract(gracz, player_dc_id)
+        # Blokada kradzieży: zawodnik nie może już mieć kontraktu
+        existing = database.is_player_under_contract(clean_name, player_dc_id)
         if existing:
             await kanal.send(
-                f"âťŚ **Ten zawodnik ma juĹĽ aktywny kontrakt z `{existing.get('club_tag', '?')}`!**\n"
-                "UĹĽyj **Wniosku Transferowego** zamiast Podpisania Gracza."
+                embed=discord.Embed(
+                    description=f"❌ **Zawodnik `{player_label}` ma już aktywny kontrakt z `{existing.get('club_tag', '?')}`!**\n"
+                                "Użyj **Wniosku Transferowego** zamiast Podpisania Gracza.",
+                    color=0xe74c3c
+                )
             )
             await asyncio.sleep(5)
             await kanal.delete()
             return
 
         while True:
-            czas = await _zadaj_pytanie(kanal, user, "DĹ‚ugoĹ›Ä‡ kontraktu (np. `30`, `30 dni`, `30.06.2027`):", client)
+            czas = await _zadaj_pytanie(kanal, user, "Długość kontraktu (np. `30`, `30 dni`, `30.06.2027`):", client)
             wazny_do = parse_expiry_date(czas)
             if wazny_do: break
-            await kanal.send(embed=discord.Embed(description=f"âťŚ BĹ‚Ä™dny format. Wpisz liczbÄ™ dni (np. `14`) lub datÄ™ `DD.MM.RRRR`.", color=0xe74c3c))
+            await kanal.send(embed=discord.Embed(description=f"❌ Błędny format. Wpisz liczbę dni (np. `14`) lub datę `DD.MM.RRRR`.", color=0xe74c3c))
 
         while True:
             klauz = await _zadaj_pytanie(kanal, user, "Kwota Klauzuli (np. `5000`) lub `Brak`:", client)
             if validate_amount_input(klauz): break
-            await kanal.send(embed=discord.Embed(description=f"âťŚ Podaj prawidĹ‚owÄ… kwotÄ™ (np. `5000`) lub `Brak`.", color=0xe74c3c))
+            await kanal.send(embed=discord.Embed(description=f"❌ Podaj prawidłową kwotę (np. `5000`) lub `Brak`.", color=0xe74c3c))
 
         c_target = database.get_club(kup)
         has_target_dc = bool(c_target and (c_target.get("board_ids") or c_target.get("reprezentant_dc")))
         needs_player = bool(player_dc_id)
         needs_target = has_target_dc
 
-        embed = discord.Embed(title=f"đź“„ Podpisanie Gracza: {gracz}", color=0x3498db)
-        embed.add_field(name="KupujÄ…cy", value=f"`{kup}`", inline=True)
+        embed = discord.Embed(title=f"📄 Podpisanie Gracza: {clean_name}", color=0x3498db)
+        embed.add_field(name="Zawodnik", value=player_label, inline=True)
+        embed.add_field(name="Kupujący", value=f"`{kup}`", inline=True)
         embed.add_field(name="Wygasa", value=f"`{wazny_do}`", inline=True)
         embed.add_field(name="Klauzula", value=f"`{klauz}`", inline=True)
         embed.add_field(name="Status", value="\n".join([
-            f"â€˘ Zawodnik: {'âŹł Oczekuje' if needs_player else 'â„ąď¸Ź Brak DC'}",
-            f"â€˘ Klub `{kup}`: {'âŹł Oczekuje' if needs_target else 'â„ąď¸Ź Brak DC zarzÄ…du'}",
-            "â€˘ ZarzÄ…d Federacji: âŹł Oczekuje"
+            f"• Zawodnik: {'⏳ Oczekuje' if needs_player else 'ℹ️ Brak DC'}",
+            f"• Klub `{kup}`: {'⏳ Oczekuje' if needs_target else 'ℹ️ Brak DC zarządu'}",
+            "• Zarząd Federacji: ⏳ Oczekuje"
         ]), inline=False)
+        embed.set_footer(text=f"{league_config.league_name()} • Biuro")
 
         v = WniosekConfirmView(user.id)
         await kanal.send(embed=embed, view=v)
         await v.wait()
         if not v.value:
-            await kanal.send(embed=discord.Embed(description=f"âťŚ Wniosek anulowany.", color=0xe74c3c))
+            await kanal.send(embed=discord.Embed(description=f"❌ Wniosek anulowany.", color=0xe74c3c))
             await asyncio.sleep(2)
             await kanal.delete()
             return
 
         app_id = database.create_application(
             app_type="PODPISANIE", applicant_id=user.id,
-            player_name=gracz, player_discord_id=player_dc_id,
+            player_name=clean_name, player_discord_id=player_dc_id,
             target_club=kup, clause=klauz, expires_at=wazny_do,
             needs_player_agree=needs_player, needs_target_club_agree=needs_target
         )
-        thread = await _send_forum_application(guild, kanal, embed, f"[{kup}] Nowy Gracz: {gracz}", app_id, ping_target=kup)
+        thread = await _send_forum_application(guild, kanal, embed, f"[{kup}] Nowy Gracz: {clean_name}", app_id, ping_target=kup)
         if player_dc_id:
             await send_dm(client, player_dc_id,
-                          f"đź“© Klub `{kup}` zĹ‚oĹĽyĹ‚ wniosek o Twoje podpisanie!\nđź”— {thread.jump_url}")
+                          f"📩 Klub `{kup}` złożył wniosek o Twoje podpisanie w Federacji Siatkówki Stołowej (FSS)!\n🔗 {thread.jump_url}")
+
 
     except TimeoutError:
         pass
@@ -278,25 +285,27 @@ async def proces_transferu(interaction: discord.Interaction):
                 break
 
         while True:
-            gracz = await _zadaj_pytanie(kanal, user, "Oznacz @Zawodnika (lub wpisz imiÄ™ jeĹ›li brak DC):", client)
-            extracted = extract_ids(gracz)
-            player_dc_id = extracted[0] if extracted else None
+            gracz_input = await _zadaj_pytanie(kanal, user, "Oznacz @Zawodnika (lub wpisz imi? je?li brak DC):", client)
+            clean_name, player_dc_id, player_label = await resolve_player_identity(guild, gracz_input, client)
 
-            existing = database.is_player_under_contract(gracz, player_dc_id)
-            # â”€â”€ NAPRAWA DZIURY LOGICZNEJ: if not existing â†’ odmowa â”€â”€
+            existing = database.is_player_under_contract(clean_name, player_dc_id)
             if not existing:
                 await kanal.send(
-                    f"âťŚ **Zawodnik `{gracz}` nie posiada aktywnego kontraktu!**\n"
-                    "Aby go pozyskaÄ‡ bez klauzuli, uĹĽyj **Podpisania Gracza**."
+                    embed=discord.Embed(
+                        description=f"❌ **Zawodnik `{clean_name}` nie posiada aktywnego kontraktu!**\n"
+                                    "Aby go pozyska? bez klauzuli, u?yj **Podpisania Gracza**.",
+                        color=0xe74c3c
+                    )
                 )
                 continue
             if existing.get("club_tag", "").upper() != sprzed:
                 actual = existing.get("club_tag", "?")
-                await kanal.send(embed=discord.Embed(description=f"âťŚ Zawodnik naleĹĽy do `{actual}`, a nie `{sprzed}`!", color=0xe74c3c))
+                await kanal.send(embed=discord.Embed(description=f"? Zawodnik nale?y do `{actual}`, a nie `{sprzed}`!", color=0xe74c3c))
                 continue
-            gracz = existing.get("name") or gracz
+            real_name = clean_player_name(existing.get("name")) or clean_name
             if not player_dc_id and existing.get("discord_id"):
                 player_dc_id = existing.get("discord_id")
+                player_label = f"**{real_name}** (<@{player_dc_id}>)"
             break
 
         while True:
@@ -360,14 +369,14 @@ async def proces_transferu(interaction: discord.Interaction):
 
         app_id = database.create_application(
             app_type="TRANSFER", applicant_id=user.id,
-            player_name=gracz, player_discord_id=player_dc_id,
+            player_name=real_name, player_discord_id=player_dc_id,
             target_club=kup, source_club=sprzed,
             amount=kwota, clause=klauz, expires_at=wazny_do,
             is_buyout=is_buyout,
             needs_player_agree=needs_player, needs_target_club_agree=needs_target, needs_source_club_agree=needs_source
         )
         thread = await _send_forum_application(guild, kanal, embed,
-                                                f"[{kup}] Transfer: {gracz}", app_id,
+                                                f"[{kup}] {'Wykup' if is_buyout else 'Transfer'}: {real_name}", app_id,
                                                 ping_target=kup, ping_source=sprzed)
         if player_dc_id:
             await send_dm(client, player_dc_id,
@@ -422,25 +431,27 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
                 break
 
         while True:
-            gracz = await _zadaj_pytanie(kanal, user, "Oznacz @Zawodnika (lub wpisz imiÄ™ jeĹ›li brak DC):", client)
-            extracted = extract_ids(gracz)
-            player_dc_id = extracted[0] if extracted else None
+            gracz_input = await _zadaj_pytanie(kanal, user, "Oznacz @Zawodnika (lub wpisz imi? je?li brak DC):", client)
+            clean_name, player_dc_id, player_label = await resolve_player_identity(guild, gracz_input, client)
 
-            existing = database.is_player_under_contract(gracz, player_dc_id)
-            # â”€â”€ NAPRAWA DZIURY LOGICZNEJ: if not existing â†’ odmowa â”€â”€
+            existing = database.is_player_under_contract(clean_name, player_dc_id)
             if not existing:
                 await kanal.send(
-                    f"âťŚ **Zawodnik `{gracz}` nie posiada aktywnego kontraktu!**\n"
-                    "Aby go pozyskaÄ‡, uĹĽyj **Podpisania Gracza**."
+                    embed=discord.Embed(
+                        description=f"❌ **Zawodnik `{clean_name}` nie posiada aktywnego kontraktu!**\n"
+                                    "Aby go pozyska?, u?yj **Podpisania Gracza**.",
+                        color=0xe74c3c
+                    )
                 )
                 continue
             if existing.get("club_tag", "").upper() != sprzed:
                 actual = existing.get("club_tag", "?")
-                await kanal.send(embed=discord.Embed(description=f"âťŚ Zawodnik naleĹĽy do `{actual}`, a nie `{sprzed}`!", color=0xe74c3c))
+                await kanal.send(embed=discord.Embed(description=f"? Zawodnik nale?y do `{actual}`, a nie `{sprzed}`!", color=0xe74c3c))
                 continue
-            gracz = existing.get("name") or gracz
+            real_name = clean_player_name(existing.get("name")) or clean_name
             if not player_dc_id and existing.get("discord_id"):
                 player_dc_id = existing.get("discord_id")
+                player_label = f"**{real_name}** (<@{player_dc_id}>)"
             break
 
         while True:
@@ -480,7 +491,7 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
 
         app_id = database.create_application(
             app_type="WYPOZYCZENIE", applicant_id=user.id,
-            player_name=gracz, player_discord_id=player_dc_id,
+            player_name=real_name, player_discord_id=player_dc_id,
             target_club=kup, source_club=sprzed,
             amount=kwota, clause="Bez zmian", expires_at=wazny_do,
             needs_player_agree=bool(player_dc_id),
@@ -528,19 +539,19 @@ async def proces_aneksu(interaction: discord.Interaction):
 
         # Zawodnik musi byÄ‡ w tym samym klubie
         while True:
-            gracz = await _zadaj_pytanie(kanal, user, f"Oznacz @Zawodnika Twojego klubu `{user_club}` (lub wpisz imiÄ™):", client)
-            extracted = extract_ids(gracz)
-            player_dc_id = extracted[0] if extracted else None
-            existing = database.is_player_under_contract(gracz, player_dc_id)
+            gracz_input = await _zadaj_pytanie(kanal, user, f"Oznacz @Zawodnika Twojego klubu `{user_club}` (lub wpisz imi?):", client)
+            clean_name, player_dc_id, player_label = await resolve_player_identity(guild, gracz_input, client)
+            existing = database.is_player_under_contract(clean_name, player_dc_id)
             if not existing:
-                await kanal.send(embed=discord.Embed(description=f"âťŚ Zawodnik `{gracz}` nie ma aktywnego kontraktu w bazie!", color=0xe74c3c))
+                await kanal.send(embed=discord.Embed(description=f"? Zawodnik `{clean_name}` nie ma aktywnego kontraktu w bazie!", color=0xe74c3c))
                 continue
             if existing.get("club_tag", "").upper() != user_club:
-                await kanal.send(embed=discord.Embed(description=f"âťŚ Zawodnik naleĹĽy do `{existing.get('club_tag', '?')}`, nie do Twojego klubu `{user_club}`!", color=0xe74c3c))
+                await kanal.send(embed=discord.Embed(description=f"? Zawodnik nale?y do `{existing.get('club_tag', '?')}`, nie do Twojego klubu `{user_club}`!", color=0xe74c3c))
                 continue
-            gracz = existing.get("name") or gracz
+            real_name = clean_player_name(existing.get("name")) or clean_name
             if not player_dc_id and existing.get("discord_id"):
                 player_dc_id = existing.get("discord_id")
+                player_label = f"**{real_name}** (<@{player_dc_id}>)"
             break
 
         stary_termin = existing.get("expires_at", "?")
@@ -561,6 +572,7 @@ async def proces_aneksu(interaction: discord.Interaction):
         final_klauz = stara_klauzula if klauz.lower() == "bez zmian" else klauz
 
         embed = discord.Embed(title=f"đź“„ Aneks do Kontraktu: {gracz}", color=0x3498db)
+        embed.add_field(name="Zawodnik", value=player_label, inline=True)
         embed.add_field(name="Klub", value=f"`{user_club}`", inline=True)
         embed.add_field(name="Stary termin", value=f"`{stary_termin}`", inline=True)
         embed.add_field(name="Nowy termin", value=f"`{wazny_do}`", inline=True)
@@ -580,7 +592,7 @@ async def proces_aneksu(interaction: discord.Interaction):
 
         app_id = database.create_application(
             app_type="ANEKS", applicant_id=user.id,
-            player_name=gracz, player_discord_id=player_dc_id,
+            player_name=real_name, player_discord_id=player_dc_id,
             target_club=user_club, clause=final_klauz, expires_at=wazny_do,
             needs_player_agree=bool(player_dc_id)
         )
@@ -623,19 +635,19 @@ async def proces_rozwiazania(interaction: discord.Interaction):
             await asyncio.sleep(5); await kanal.delete(); return
 
         while True:
-            gracz = await _zadaj_pytanie(kanal, user, f"Oznacz @Zawodnika do rozwiÄ…zania (z klubu `{user_club}`):", client)
-            extracted = extract_ids(gracz)
-            player_dc_id = extracted[0] if extracted else None
-            existing = database.is_player_under_contract(gracz, player_dc_id)
+            gracz_input = await _zadaj_pytanie(kanal, user, f"Oznacz @Zawodnika do rozwiązania (z klubu `{user_club}`):", client)
+            clean_name, player_dc_id, player_label = await resolve_player_identity(guild, gracz_input, client)
+            existing = database.is_player_under_contract(clean_name, player_dc_id)
             if not existing:
-                await kanal.send(embed=discord.Embed(description=f"âťŚ Zawodnik `{gracz}` nie istnieje w bazie!", color=0xe74c3c))
+                await kanal.send(embed=discord.Embed(description=f"❌ Zawodnik `{clean_name}` nie istnieje w bazie!", color=0xe74c3c))
                 continue
             if existing.get("club_tag", "").upper() != user_club:
-                await kanal.send(embed=discord.Embed(description=f"âťŚ Zawodnik naleĹĽy do `{existing.get('club_tag', '?')}`, nie do `{user_club}`!", color=0xe74c3c))
+                await kanal.send(embed=discord.Embed(description=f"❌ Zawodnik należy do `{existing.get('club_tag', '?')}`, nie do `{user_club}`!", color=0xe74c3c))
                 continue
-            gracz = existing.get("name") or gracz
+            real_name = clean_player_name(existing.get("name")) or clean_name
             if not player_dc_id and existing.get("discord_id"):
                 player_dc_id = existing.get("discord_id")
+                player_label = f"**{real_name}** (<@{player_dc_id}>)"
             break
 
         while True:
@@ -656,6 +668,7 @@ async def proces_rozwiazania(interaction: discord.Interaction):
             title=f"{'đź¤ť Porozumienie stron' if tryb == '1' else 'âš–ď¸Ź Wniosek dyscyplinarny'}: {gracz}",
             color=0xe67e22
         )
+        embed.add_field(name="Zawodnik", value=player_label, inline=True)
         embed.add_field(name="Klub", value=f"`{user_club}`", inline=True)
         embed.add_field(name="Tryb", value="Za porozumieniem stron" if tryb == "1" else "Dyscyplinarne", inline=True)
         embed.add_field(name="Uzasadnienie", value=uzasadnienie, inline=False)
@@ -673,7 +686,7 @@ async def proces_rozwiazania(interaction: discord.Interaction):
 
         app_id = database.create_application(
             app_type=app_type, applicant_id=user.id,
-            player_name=gracz, player_discord_id=player_dc_id,
+            player_name=real_name, player_discord_id=player_dc_id,
             source_club=user_club, reason=uzasadnienie,
             needs_player_agree=needs_player
         )
@@ -704,7 +717,7 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
     try:
         await interaction.followup.send(f"KanaĹ‚: {kanal.mention}", ephemeral=True)
         embed_start = discord.Embed(title="âš™ď¸Ź ZarzÄ…dzanie Klubem", description=f"Witaj {user.mention}! Bot poprowadzi CiÄ™ przez proces.\n> Masz **15 minut** na kaĹĽdÄ… odpowiedĹş.", color=0x2b2d31)
-        embed_start.set_footer(text="Liga Federacji â€˘ Biuro")
+        embed_start.set_footer(text=f"{league_config.league_name()} • Biuro")
         await kanal.send(embed=embed_start)
 
         # Weryfikacja: wnioskodawca musi byÄ‡ w zarzÄ…dzie lub wĹ‚aĹ›cicielem

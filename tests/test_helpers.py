@@ -76,3 +76,40 @@ class TestHelpers(unittest.TestCase):
 
     def test_build_squad_bar_full(self):
         self.assertEqual(build_squad_bar(3, 3), "`[■■■] 3/3` · Kadra pełna ⛔")
+
+    def test_clean_player_name_raw_mention(self):
+        from utils.helpers import clean_player_name
+        self.assertEqual(clean_player_name("<@123456789>", 123456789), "Zawodnik_123456789")
+
+    def test_clean_player_name_with_text(self):
+        from utils.helpers import clean_player_name
+        self.assertEqual(clean_player_name("Jan Kowalski <@123456789>", 123456789), "Jan Kowalski")
+
+    def test_clean_player_name_plain(self):
+        from utils.helpers import clean_player_name
+        self.assertEqual(clean_player_name("Marek Nowak", None), "Marek Nowak")
+
+    def test_resolve_player_identity_plain(self):
+        import asyncio
+        from utils.helpers import resolve_player_identity
+        name, dc_id, label = asyncio.run(resolve_player_identity(None, "Jan Kowalski"))
+        self.assertEqual(name, "Jan Kowalski")
+        self.assertIsNone(dc_id)
+        self.assertIn("Jan Kowalski", label)
+
+    def test_resolve_player_identity_with_mention(self):
+        import asyncio
+        from utils.helpers import resolve_player_identity
+        name, dc_id, label = asyncio.run(resolve_player_identity(None, "Piotr <@123456789>"))
+        self.assertEqual(name, "Piotr")
+        self.assertEqual(dc_id, 123456789)
+        self.assertEqual(label, "**Piotr** (<@123456789>)")
+
+    def test_resolve_player_identity_mention_only(self):
+        import asyncio
+        from utils.helpers import resolve_player_identity
+        name, dc_id, label = asyncio.run(resolve_player_identity(None, "<@987654321>"))
+        self.assertEqual(name, "Zawodnik_987654321")
+        self.assertEqual(dc_id, 987654321)
+        self.assertIn("987654321", label)
+

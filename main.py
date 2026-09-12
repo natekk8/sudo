@@ -30,12 +30,13 @@ async def setup_panel(ctx):
     2️⃣ Rynek Transferowy – giełda graczy i przegląd składów
     """
     mx = league_config.max_players()
+    org_name = league_config.league_name()
     embed1 = discord.Embed(
-        title="🏛️ Biuro Federacji",
+        title="🏛️ Biuro Federacji Siatkówki Stołowej (FSS)",
         description=(
-            "Oficjalne procesy rejestracyjno-transferowe. Bot otworzy prywatny kanał ticketu, "
+            "Oficjalne procesy rejestracyjno-transferowe FSS. Bot otworzy prywatny kanał ticketu, "
             "gdzie odpowiesz na pytania i możesz swobodnie oznaczać (@) użytkowników.\n\n"
-            "**📝 Rejestracja Klubu** · Zakładanie nowej drużyny w lidze\n"
+            "**📝 Rejestracja Klubu** · Zakładanie nowej drużyny w FSS\n"
             f"**👤 Podpisanie Gracza** · Rejestracja wolnego agenta (limit: **{mx}** graczy)\n"
             "**🤝 Wniosek Transferowy** · Kupno zawodnika z innego klubu\n"
             "**⏱️ Wypożyczenie** · Czasowe przejście z automatycznym powrotem\n"
@@ -45,14 +46,13 @@ async def setup_panel(ctx):
         ),
         color=0x2b2d31
     )
-    embed1.set_footer(text="Liga Federacji • Biuro")
+    embed1.set_footer(text=f"{org_name} • Biuro")
     await ctx.send(embed=embed1, view=WidokPaneluGlownego())
 
-
     embed2 = discord.Embed(
-        title="📊 Rynek Transferowy",
+        title="📊 Rynek Transferowy FSS",
         description=(
-            "Giełda graczy i baza składów.\n\n"
+            "Giełda graczy i baza składów Federacji Siatkówki Stołowej.\n\n"
             "**🙋 Szukam Klubu**\n"
             "Zarejestruj się jako wolny agent – widoczny dla zarządów szukających zawodników. "
             "Ponowne kliknięcie usunie Cię z listy.\n\n"
@@ -63,8 +63,9 @@ async def setup_panel(ctx):
         ),
         color=0x1e1f22
     )
-    embed2.set_footer(text="Liga Federacji • Rynek")
+    embed2.set_footer(text=f"{org_name} • Rynek")
     await ctx.send(embed=embed2, view=WidokRynkuTransferowego())
+
 
     try:
         await ctx.message.delete()

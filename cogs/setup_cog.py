@@ -1,4 +1,4 @@
-﻿"""
+"""
 cogs/setup_cog.py
 =================
 Unified /setup slash command z nested subgroupami i interaktywnym UI.
@@ -52,14 +52,14 @@ def _build_panel_embed() -> discord.Embed:
     close_at = market.get("close_at")
 
     embed = discord.Embed(
-        title="⚙️  Panel Administracyjny Ligi",
+        title="⚙️  Panel Administracyjny FSS",
         color=0x1e1f22,
         timestamp=datetime.utcnow()
     )
 
     # ── Sekcja: Liga ──────────────────────────────────────────────────────────
     embed.add_field(name="🏆  Ogolne", value=(
-        f"> **Nazwa ligi:** `{cfg.get_str('cfg_league_name') or 'Liga Federacji'}`\n"
+        f"> **Organizacja:** `{cfg.get_str('cfg_league_name') or 'Federacja Siatkówki Stołowej (FSS)'}`\n"
         f"> **Sezon:** `{cfg.get_str('cfg_season_label') or '2026/27'}`\n"
         f"> **Max graczy w klubie:** `{cfg.max_players()}`"
     ), inline=True)
@@ -87,8 +87,9 @@ def _build_panel_embed() -> discord.Embed:
         rynek_lines.append("> **Harmonogram:** brak zaplanowanych zmian")
     embed.add_field(name="🔄  Rynek Transferowy", value="\n".join(rynek_lines), inline=False)
 
-    embed.set_footer(text="Zmiany konfiguracji sa natychmiastowe • /setup <kategoria> <opcja>")
+    embed.set_footer(text=f"{cfg.league_name()} | /setup <kategoria> <opcja>")
     return embed
+
 
 
 # ─── Widok interaktywny panelu ────────────────────────────────────────────────
@@ -212,13 +213,14 @@ class SetupCog(commands.Cog):
             cfg.set_config("cfg_season_label", label)
             await interaction.response.send_message(embed=_ok(f"Sezon ustawiony na **{label}**."), ephemeral=True)
 
-        @liga.command(name="nazwa", description="Zmien nazwe ligi (widoczna w stopkach embedow)")
-        @app_commands.describe(nazwa="Pelna nazwa, np. Liga Federacji")
+        @liga.command(name="nazwa", description="Zmien nazwe organizacji (widoczna w stopkach embedow)")
+        @app_commands.describe(nazwa="Pelna nazwa, np. Federacja Siatkowki Stolowej (FSS)")
         async def slash_liga_nazwa(interaction: discord.Interaction, nazwa: str):
             if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
             if len(nazwa) > 50: return await interaction.response.send_message("❌ Za dluga (max 50 znakow).", ephemeral=True)
             cfg.set_config("cfg_league_name", nazwa)
-            await interaction.response.send_message(embed=_ok(f"Nazwa ligi zmieniona na **{nazwa}**."), ephemeral=True)
+            await interaction.response.send_message(embed=_ok(f"Nazwa organizacji zmieniona na **{nazwa}**."), ephemeral=True)
+
 
         # ── /setup kanal ──────────────────────────────────────────────────
 

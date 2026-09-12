@@ -100,9 +100,19 @@ def is_player_under_contract(player_name: str, player_discord_id: int = None):
         p = get_player_by_discord_id(player_discord_id)
         if p: return p
     if player_name:
+        import re
+        extracted = re.findall(r'<@!?(\d+)>', str(player_name))
+        if extracted:
+            p = get_player_by_discord_id(int(extracted[0]))
+            if p: return p
+        cleaned = re.sub(r'<@!?\d+>', '', str(player_name)).strip("()[]\"' ")
+        if cleaned:
+            p = get_player(cleaned)
+            if p: return p
         p = get_player(player_name)
         if p: return p
     return None
+
 
 def delete_player(name: str, discord_id: int = None):
     with _lock:

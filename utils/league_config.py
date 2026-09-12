@@ -1,4 +1,4 @@
-﻿"""
+"""
 utils/league_config.py
 ======================
 Dynamiczne ustawienia ligi.
@@ -25,7 +25,7 @@ _DEFAULTS = {
     "cfg_role_federacja":     os.getenv("ROLE_FEDERACJA_ID", "0"),
     "cfg_rola_wzorzec":       os.getenv("ROLA_WZORZEC_ID", "0"),
     "cfg_season_label":       "2026/27",
-    "cfg_league_name":        "Liga Federacji",
+    "cfg_league_name":        "Federacja Siatkówki Stołowej (FSS)",
 }
 
 _LABELS = {
@@ -35,8 +35,9 @@ _LABELS = {
     "cfg_role_federacja":     "Rola Federacji (ID)",
     "cfg_rola_wzorzec":       "Wzorzec roli gracza (ID)",
     "cfg_season_label":       "Oznaczenie sezonu",
-    "cfg_league_name":        "Nazwa ligi",
+    "cfg_league_name":        "Nazwa Federacji",
 }
+
 
 VALID_KEYS = set(_DEFAULTS.keys())
 
@@ -81,7 +82,8 @@ def season_label() -> str:
     return get_str("cfg_season_label") or "2026/27"
 
 def league_name() -> str:
-    return get_str("cfg_league_name") or "Liga Federacji"
+    return get_str("cfg_league_name") or "Federacja Siatkówki Stołowej (FSS)"
+
 
 
 def set_config(key: str, value: str) -> bool:
