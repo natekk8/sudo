@@ -19,7 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import database
 from utils.helpers import (
     clean_tag, is_valid_tag, extract_ids, parse_expiry_date,
-    parse_amount, validate_amount_input, build_squad_bar, safe_thread_name
+    parse_amount, validate_amount_input, build_squad_bar, safe_thread_name,
+    parse_schedule_datetime
 )
 
 
@@ -144,6 +145,32 @@ class TestParseExpiryDate(unittest.TestCase):
 
     def test_zero_days_rejected(self):
         self.assertIsNone(parse_expiry_date("0"))
+
+
+class TestParseScheduleDatetime(unittest.TestCase):
+    def test_relative_hours(self):
+        res = parse_schedule_datetime("2h")
+        self.assertIsNotNone(res)
+        dt = datetime.strptime(res, "%Y-%m-%d %H:%M:%S")
+        self.assertTrue(dt > datetime.now())
+
+    def test_relative_days(self):
+        res = parse_schedule_datetime("3d")
+        self.assertIsNotNone(res)
+        dt = datetime.strptime(res, "%Y-%m-%d %H:%M:%S")
+        self.assertTrue(dt > datetime.now())
+
+    def test_absolute_date_time(self):
+        future_dt = datetime.now() + timedelta(days=30)
+        formatted = future_dt.strftime("%d.%m.%Y %H:%M")
+        res = parse_schedule_datetime(formatted)
+        self.assertIsNotNone(res)
+
+    def test_past_date_rejected(self):
+        self.assertIsNone(parse_schedule_datetime("01.01.2020 12:00"))
+
+    def test_invalid_text_rejected(self):
+        self.assertIsNone(parse_schedule_datetime("nieprawidlowy_termin"))
 
 
 class TestBuildSquadBar(unittest.TestCase):
@@ -416,6 +443,96 @@ class TestDatabase(unittest.TestCase):
                     os.remove(backup_file)
                 except Exception:
                     pass
+
+    # ── Test Rynku Transferowego (Settings) ──
+    def test_market_status_and_schedule(self):
+        # Domyślnie rynek jest otwarty
+        self.assertTrue(database.is_market_open())
+        state = database.get_market_state()
+        self.assertEqual(state["status"], "OPEN")
+
+        # Zamknięcie rynku
+        database.set_market_status("CLOSED", scheduled_open="2027-01-01 12:00:00")
+        self.assertFalse(database.is_market_open())
+        state2 = database.get_market_state()
+        self.assertEqual(state2["status"], "CLOSED")
+        self.assertEqual(state2["open_at"], "2027-01-01 12:00:00")
+
+        # Ponowne otwarcie
+        database.set_market_status("OPEN")
+        self.assertTrue(database.is_market_open())
+
+    # ── Test Update Club Full (Zarządzanie Klubem) ──
+    def test_update_club_full(self):
+        database.add_club("ABC", "Stary Klub", 111, 222, board_ids=[333])
+        database.add_or_update_player("Gracz ABC", 999, "ABC", "ABC", "1000", "TRANSFER", "2027-01-01 00:00:00")
+        database.add_transfer_history("Gracz ABC", 999, "ABC", "ABC", "TRANSFER", "1000")
+
+        # Pełna aktualizacja klubu: zmiana tagu, nazwy, właściciela i zarządu
+        database.update_club_full(
+            old_tag="ABC",
+            new_tag="XYZ",
+            new_name="Nowy Klub",
+            new_founder_txt="Nowy Właściciel <@444>",
+            new_board_txt="Nowy Zarząd <@555> <@666>",
+            new_board_ids=[555, 666],
+            new_rep_id=444
+        )
+
+        self.assertIsNone(database.get_club("ABC"))
+        new_c = database.get_club("XYZ")
+        self.assertIsNotNone(new_c)
+        self.assertEqual(new_c["name"], "Nowy Klub")
+        self.assertEqual(new_c["founder_txt"], "Nowy Właściciel <@444>")
+        self.assertEqual(new_c["reprezentant_dc"], 444)
+        self.assertEqual(new_c["board_ids"], [555, 666])
+
+        # Kaskada do graczy
+        p = database.get_player("Gracz ABC")
+        self.assertEqual(p["club_tag"], "XYZ")
+        self.assertEqual(p["parent_club_tag"], "XYZ")
+
+        # Kaskada do historii transferów
+        hist = database.get_player_transfer_history("Gracz ABC", 999)
+        self.assertEqual(hist[0]["from_club"], "XYZ")
+        self.assertEqual(hist[0]["to_club"], "XYZ")
+
+    # ── Test Tworzenia Wniosku ZARZADZANIE_KLUBU ──
+    def test_create_application_zarzadzanie_klubu(self):
+        app_id = database.create_application(
+            app_type="ZARZADZANIE_KLUBU",
+            applicant_id=12345,
+            club_tag="TAG",
+            old_club_tag="TAG",
+            club_name="Zmieniona Nazwa",
+            new_founder_txt="Nowy Wlasciciel <@111>",
+            new_board_txt="Nowy Zarzad <@222>",
+            reason="Przekazanie klubu nowemu inwestorowi"
+        )
+        app = database.get_application(app_id)
+        self.assertIsNotNone(app)
+        self.assertEqual(app["type"], "ZARZADZANIE_KLUBU")
+        self.assertEqual(app["new_founder_txt"], "Nowy Wlasciciel <@111>")
+        self.assertEqual(app["new_board_txt"], "Nowy Zarzad <@222>")
+        self.assertEqual(app["reason"], "Przekazanie klubu nowemu inwestorowi")
+
+    # ── Test Resetu Sezonu 2026/27 ──
+    def test_reset_database_for_new_season(self):
+        database.add_club("SEZ", "Sezonowy Klub", 1, 2)
+        database.add_or_update_player("Gracz 1", 11, "SEZ", "SEZ", "Brak", "TRANSFER", "2027-01-01 00:00:00")
+        database.register_free_agent(22, "Agent 1")
+        database.add_transfer_history("Gracz 1", 11, "SEZ", "SEZ", "TRANSFER", "0")
+        database.set_market_status("CLOSED")
+
+        # Reset bazy
+        database.reset_database_for_new_season()
+
+        # Wszystkie tabele powinny być puste
+        self.assertEqual(len(database.get_all_clubs()), 0)
+        self.assertEqual(len(database.get_all_players()), 0)
+        self.assertEqual(len(database.get_all_free_agents()), 0)
+        self.assertEqual(len(database.get_pending_applications()), 0)
+        self.assertTrue(database.is_market_open())
 
 
 if __name__ == "__main__":

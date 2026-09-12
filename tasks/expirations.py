@@ -7,7 +7,7 @@ from utils.helpers import send_dm, get_now_warsaw, get_or_fetch_member
 
 def setup_expirations_task(bot: discord.Client, guild_id: int = None):
 
-    @tasks.loop(minutes=30)
+    @tasks.loop(minutes=2)
     async def check_expirations():
         await bot.wait_until_ready()
 
@@ -22,6 +22,50 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
 
         kom_channel = guild.get_channel(CHANNEL_KOMUNIKATY_ID)
         now = get_now_warsaw()
+
+        # ── 0. Harmonogram Otwarcia / Zamknięcia Rynku Transferowego ──
+        try:
+            market_state = database.get_market_state()
+            current_status = market_state.get("status", "OPEN")
+            close_at_str = market_state.get("close_at")
+            open_at_str = market_state.get("open_at")
+
+            # Sprawdzenie planowanego zamknięcia rynku
+            if close_at_str and current_status != "CLOSED":
+                try:
+                    close_dt = datetime.strptime(close_at_str, "%Y-%m-%d %H:%M:%S")
+                    if now >= close_dt:
+                        database.set_market_status("CLOSED", scheduled_close="")
+                        print(f"[Market] Rynek transferowy został automatycznie ZAMKNIĘTY o {now}.")
+                        if kom_channel:
+                            await kom_channel.send(
+                                "🔒 **RYNEK TRANSFEROWY ZOSTAŁ ZAMKNIĘTY!**\n"
+                                "> Zgodnie z harmonogramem ligi okienko transferowe zostało zamknięte.\n"
+                                "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało zablokowane.",
+                                allowed_mentions=discord.AllowedMentions.none()
+                            )
+                except ValueError:
+                    pass
+
+            # Sprawdzenie planowanego otwarcia rynku
+            if open_at_str and current_status == "CLOSED":
+                try:
+                    open_dt = datetime.strptime(open_at_str, "%Y-%m-%d %H:%M:%S")
+                    if now >= open_dt:
+                        database.set_market_status("OPEN", scheduled_open="")
+                        print(f"[Market] Rynek transferowy został automatycznie OTWARTY o {now}.")
+                        if kom_channel:
+                            await kom_channel.send(
+                                "🔓 **RYNEK TRANSFEROWY ZOSTAŁ OTWARTY!**\n"
+                                "> Zgodnie z harmonogramem ligi okienko transferowe zostało otwarte!\n"
+                                "> Kluby mogą rejestrować wolnych agentów, realizować transfery i wypożyczenia.",
+                                allowed_mentions=discord.AllowedMentions.none()
+                            )
+                except ValueError:
+                    pass
+        except Exception as e:
+            print(f"[Expirations] Błąd sprawdzania harmonogramu rynku: {e}")
+
         players = database.get_all_players()
 
         # ── 1. Sprawdzanie wygaśnięć kontraktów i przypomnień per gracz ──

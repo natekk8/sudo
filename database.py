@@ -74,6 +74,8 @@ def init_db():
                     old_club_tag TEXT,
                     founder_txt TEXT,
                     board_txt TEXT,
+                    new_founder_txt TEXT,
+                    new_board_txt TEXT,
                     player_name TEXT,
                     player_discord_id INTEGER,
                     target_club TEXT,
@@ -118,6 +120,13 @@ def init_db():
                 )
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
+
             _migrate_columns(cursor)
             conn.commit()
 
@@ -145,6 +154,8 @@ def _migrate_columns(cursor):
         "is_buyout": "INTEGER DEFAULT 0",
         "reason": "TEXT",
         "old_club_tag": "TEXT",
+        "new_founder_txt": "TEXT",
+        "new_board_txt": "TEXT",
     }.items():
         if col not in app_cols:
             cursor.execute(f"ALTER TABLE applications ADD COLUMN {col} {typ}")
@@ -252,22 +263,48 @@ def get_all_clubs() -> list:
             result.append(d)
         return result
 
-def rebrand_club(old_tag: str, new_tag: str, new_name: str):
-    """Kaskadowy rebranding: zmienia tag i nazwę klubu oraz aktualizuje wszystkich graczy."""
+def update_club_full(old_tag: str, new_tag: str = None, new_name: str = None,
+                     new_founder_txt: str = None, new_board_txt: str = None,
+                     new_board_ids: list = None, new_rep_id: int = None):
+    """
+    Kaskadowa aktualizacja klubu: tag, nazwa, właściciel, zarząd.
+    Aktualizuje tabelę clubs oraz kaskadowo graczy i historię transferów.
+    """
     old_tag = old_tag.strip().upper()
-    new_tag = new_tag.strip().upper()
+    new_tag = new_tag.strip().upper() if new_tag else old_tag
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
-            # Aktualizuj rekord klubu
-            cursor.execute("UPDATE clubs SET tag = ?, name = ? WHERE tag = ?", (new_tag, new_name, old_tag))
-            # Kaskada na graczy
-            cursor.execute("UPDATE players SET club_tag = ? WHERE club_tag = ?", (new_tag, old_tag))
-            cursor.execute("UPDATE players SET parent_club_tag = ? WHERE parent_club_tag = ?", (new_tag, old_tag))
-            # Kaskada na historię transferów
-            cursor.execute("UPDATE transfer_history SET from_club = ? WHERE from_club = ?", (new_tag, old_tag))
-            cursor.execute("UPDATE transfer_history SET to_club = ? WHERE to_club = ?", (new_tag, old_tag))
+            cursor.execute("SELECT * FROM clubs WHERE tag = ?", (old_tag,))
+            club = cursor.fetchone()
+            if not club:
+                return False
+
+            final_name = new_name.strip() if new_name and new_name.lower() != "bez zmian" else club["name"]
+            final_founder = new_founder_txt.strip() if new_founder_txt and new_founder_txt.lower() != "bez zmian" else club["founder_txt"]
+            final_board_txt = new_board_txt.strip() if new_board_txt and new_board_txt.lower() != "bez zmian" else club["board_txt"]
+            final_board_ids = json.dumps(new_board_ids) if new_board_ids is not None else club["board_ids"]
+            final_rep = new_rep_id if new_rep_id is not None else club["reprezentant_dc"]
+
+            cursor.execute("""
+                UPDATE clubs SET
+                    tag = ?, name = ?, founder_txt = ?, board_txt = ?,
+                    board_ids = ?, reprezentant_dc = ?
+                WHERE tag = ?
+            """, (new_tag, final_name, final_founder, final_board_txt, final_board_ids, final_rep, old_tag))
+
+            if new_tag != old_tag:
+                cursor.execute("UPDATE players SET club_tag = ? WHERE club_tag = ?", (new_tag, old_tag))
+                cursor.execute("UPDATE players SET parent_club_tag = ? WHERE parent_club_tag = ?", (new_tag, old_tag))
+                cursor.execute("UPDATE transfer_history SET from_club = ? WHERE from_club = ?", (new_tag, old_tag))
+                cursor.execute("UPDATE transfer_history SET to_club = ? WHERE to_club = ?", (new_tag, old_tag))
+
             conn.commit()
+            return True
+
+def rebrand_club(old_tag: str, new_tag: str, new_name: str):
+    """Kaskadowy rebranding: zmienia tag i nazwę klubu oraz aktualizuje wszystkich graczy."""
+    return update_club_full(old_tag, new_tag=new_tag, new_name=new_name)
 
 # ==================== ZAWODNICY ====================
 def get_club_player_count(club_tag: str) -> int:
@@ -484,6 +521,7 @@ def create_application(
     app_type: str, applicant_id: int,
     club_name: str = None, club_tag: str = None, old_club_tag: str = None,
     founder_txt: str = None, board_txt: str = None,
+    new_founder_txt: str = None, new_board_txt: str = None,
     player_name: str = None, player_discord_id: int = None,
     target_club: str = None, source_club: str = None,
     amount: str = None, clause: str = None, expires_at: str = None,
@@ -499,16 +537,18 @@ def create_application(
             cursor.execute("""
                 INSERT INTO applications (
                     type, applicant_id, club_name, club_tag, old_club_tag,
-                    founder_txt, board_txt, player_name, player_discord_id,
+                    founder_txt, board_txt, new_founder_txt, new_board_txt,
+                    player_name, player_discord_id,
                     target_club, source_club, amount, clause, expires_at,
                     is_buyout, reason,
                     needs_player_agree, needs_target_club_agree, needs_source_club_agree,
                     player_agreed, target_club_agreed, source_club_agreed,
                     status, rejected_by, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'PENDING', NULL, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'PENDING', NULL, ?)
             """, (
                 app_type, applicant_id, club_name, club_tag, old_club_tag,
-                founder_txt, board_txt, player_name, player_discord_id,
+                founder_txt, board_txt, new_founder_txt, new_board_txt,
+                player_name, player_discord_id,
                 target_club, source_club, amount, clause, expires_at,
                 1 if is_buyout else 0, reason,
                 1 if needs_player_agree else 0,
@@ -655,3 +695,71 @@ def get_db_file_stats() -> dict:
         stats["foreign_keys"] = "ON" if cursor.fetchone()[0] else "OFF"
 
     return stats
+
+# ==================== USTAWIENIA I RYNEK TRANSFEROWY ====================
+def get_setting(key: str, default: str = None) -> str:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row[0] if row and row[0] is not None else default
+
+def set_setting(key: str, value: str):
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            val_str = str(value) if value is not None else None
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, val_str))
+            conn.commit()
+
+def delete_setting(key: str):
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM settings WHERE key = ?", (key,))
+            conn.commit()
+
+def is_market_open() -> bool:
+    """Zwraca True jeśli rynek jest otwarty (domyślnie OPEN)."""
+    return get_setting("market_status", "OPEN").upper() != "CLOSED"
+
+def set_market_status(status: str, scheduled_open: str = None, scheduled_close: str = None):
+    """
+    Ustawia stan rynku ('OPEN' lub 'CLOSED') oraz opcjonalne planowane daty.
+    """
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('market_status', ?)", (status.upper(),))
+            if scheduled_open is not None:
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('market_open_at', ?)",
+                               (str(scheduled_open) if scheduled_open else None,))
+            if scheduled_close is not None:
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('market_close_at', ?)",
+                               (str(scheduled_close) if scheduled_close else None,))
+            conn.commit()
+
+def get_market_state() -> dict:
+    """Zwraca słownik ze stanem rynku i zaplanowanymi datami."""
+    return {
+        "status": get_setting("market_status", "OPEN"),
+        "open_at": get_setting("market_open_at", None),
+        "close_at": get_setting("market_close_at", None)
+    }
+
+# ==================== RESET NA SEZON 2026/27 ====================
+def reset_database_for_new_season():
+    """Czyści wszystkie tabele ligowe, przygotowując bazę na sezon 2026/27."""
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM players")
+            cursor.execute("DELETE FROM applications")
+            cursor.execute("DELETE FROM transfer_history")
+            cursor.execute("DELETE FROM free_agents")
+            cursor.execute("DELETE FROM clubs")
+            cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', 0)")
+            cursor.execute("DELETE FROM settings")
+            cursor.execute("INSERT INTO settings (key, value) VALUES ('market_status', 'OPEN')")
+            conn.commit()
+

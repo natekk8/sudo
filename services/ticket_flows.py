@@ -15,7 +15,7 @@ from views.application_view import ForumApplicationView
 
 async def _create_ticket_channel(guild: discord.Guild, user: discord.Member, prefix: str) -> discord.TextChannel:
     overwrites = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
         user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True)
     }
@@ -94,12 +94,12 @@ async def proces_rejestracji_klubu(interaction: discord.Interaction):
             else:
                 break
 
-        zalozyciel = await _zadaj_pytanie(kanal, user, "Oznacz @Głównego Założyciela (lub wpisz imię jeśli brak DC):", client)
+        wlasciciel = await _zadaj_pytanie(kanal, user, "Oznacz @Właściciela Klubu (lub wpisz imię jeśli brak DC):", client)
         zarzad = await _zadaj_pytanie(kanal, user, "Oznacz @Pozostały Zarząd (lub wpisz 'Brak'):", client)
 
         embed = discord.Embed(title=f"🏛️ Podsumowanie: {nazwa}", color=0x2b2d31)
         embed.add_field(name="Skrót", value=f"`{skrot}`", inline=True)
-        embed.add_field(name="Założyciel", value=zalozyciel, inline=True)
+        embed.add_field(name="Właściciel", value=wlasciciel, inline=True)
         embed.add_field(name="Zarząd", value=zarzad, inline=False)
         embed.add_field(name="Status", value="⏳ Oczekuje na decyzję Zarządu Federacji", inline=False)
 
@@ -114,7 +114,7 @@ async def proces_rejestracji_klubu(interaction: discord.Interaction):
 
         app_id = database.create_application(
             app_type="REJESTRACJA_KLUBU", applicant_id=user.id,
-            club_name=nazwa, club_tag=skrot, founder_txt=zalozyciel, board_txt=zarzad
+            club_name=nazwa, club_tag=skrot, founder_txt=wlasciciel, board_txt=zarzad
         )
         await _send_forum_application(guild, kanal, embed, f"[{skrot}] Rejestracja: {nazwa}", app_id)
 
@@ -135,6 +135,12 @@ async def proces_rejestracji_klubu(interaction: discord.Interaction):
 # =========================================================================
 async def proces_podpisania(interaction: discord.Interaction):
     guild, user, client = interaction.guild, interaction.user, interaction.client
+    if not database.is_market_open():
+        return await interaction.followup.send(
+            "⛔ **Rynek transferowy jest obecnie ZAMKNIĘTY!**\n"
+            "> Składanie wniosków kontraktowych, transferów i wypożyczeń zostało wstrzymane przez Zarząd Federacji.",
+            ephemeral=True
+        )
     if _check_spam(guild, user, interaction):
         return await interaction.followup.send("❌ Masz już otwarty kanał wniosku.", ephemeral=True)
 
@@ -231,6 +237,12 @@ async def proces_podpisania(interaction: discord.Interaction):
 # =========================================================================
 async def proces_transferu(interaction: discord.Interaction):
     guild, user, client = interaction.guild, interaction.user, interaction.client
+    if not database.is_market_open():
+        return await interaction.followup.send(
+            "⛔ **Rynek transferowy jest obecnie ZAMKNIĘTY!**\n"
+            "> Składanie wniosków kontraktowych, transferów i wypożyczeń zostało wstrzymane przez Zarząd Federacji.",
+            ephemeral=True
+        )
     if _check_spam(guild, user, interaction):
         return await interaction.followup.send("❌ Masz już otwarty kanał wniosku.", ephemeral=True)
 
@@ -366,6 +378,12 @@ async def proces_transferu(interaction: discord.Interaction):
 # =========================================================================
 async def proces_wypozyczenia(interaction: discord.Interaction):
     guild, user, client = interaction.guild, interaction.user, interaction.client
+    if not database.is_market_open():
+        return await interaction.followup.send(
+            "⛔ **Rynek transferowy jest obecnie ZAMKNIĘTY!**\n"
+            "> Składanie wniosków kontraktowych, transferów i wypożyczeń zostało wstrzymane przez Zarząd Federacji.",
+            ephemeral=True
+        )
     if _check_spam(guild, user, interaction):
         return await interaction.followup.send("❌ Masz już otwarty kanał wniosku.", ephemeral=True)
 
@@ -658,19 +676,22 @@ async def proces_rozwiazania(interaction: discord.Interaction):
 
 
 # =========================================================================
-# 7. REBRANDING KLUBU
+# 7. ZARZĄDZANIE KLUBEM (Nazwa, TAG, Właściciel, Zarząd)
 # =========================================================================
-async def proces_rebrandingu(interaction: discord.Interaction):
+async def proces_zarzadzania_klubem(interaction: discord.Interaction):
     guild, user, client = interaction.guild, interaction.user, interaction.client
     if _check_spam(guild, user, interaction):
         return await interaction.followup.send("❌ Masz już otwarty kanał wniosku.", ephemeral=True)
 
-    kanal = await _create_ticket_channel(guild, user, "rebrand")
+    kanal = await _create_ticket_channel(guild, user, "zarzadzanie")
     try:
         await interaction.followup.send(f"Kanał: {kanal.mention}", ephemeral=True)
-        await kanal.send("*Rebranding klubu – masz 15 min na każdą odpowiedź.*")
+        await kanal.send(
+            f"⚙️ Witaj {user.mention}! **Zarządzanie Klubem** (Nazwa, TAG, Właściciel, Zarząd).\n"
+            "*Masz 15 min na każdą odpowiedź. Wpisz `Bez zmian`, aby pozostawić dotychczasową wartość.*"
+        )
 
-        # Weryfikacja: wnioskodawca musi być zarządem
+        # Weryfikacja: wnioskodawca musi być w zarządzie lub właścicielem
         all_clubs = database.get_all_clubs()
         user_club = None
         for c in all_clubs:
@@ -678,16 +699,27 @@ async def proces_rebrandingu(interaction: discord.Interaction):
                 user_club = c["tag"]
                 break
         if not user_club:
-            await kanal.send("❌ Nie jesteś w zarządzie żadnego zarejestrowanego klubu.")
+            await kanal.send("❌ Nie jesteś w zarządzie ani właścicielem żadnego zarejestrowanego klubu.")
             await asyncio.sleep(5); await kanal.delete(); return
 
         stary_klub = database.get_club(user_club)
         stara_nazwa = stary_klub.get("name", user_club)
-        await kanal.send(f"ℹ️ Zmieniasz rebranding klubu: **{stara_nazwa}** (`{user_club}`)")
+        stary_wlasciciel = stary_klub.get("founder_txt") or "Brak"
+        stary_zarzad = stary_klub.get("board_txt") or "Brak"
 
-        nowa_nazwa_input = await _zadaj_pytanie(kanal, user, f"Nowa pełna nazwa klubu (lub wpisz `Bez zmian` by zachować `{stara_nazwa}`):", client)
+        await kanal.send(
+            f"ℹ️ **Aktualne dane klubu:**\n"
+            f"> Pełna nazwa: **{stara_nazwa}**\n"
+            f"> TAG: `{user_club}`\n"
+            f"> Właściciel: {stary_wlasciciel}\n"
+            f"> Zarząd: {stary_zarzad}"
+        )
+
+        # 1. Pełna nazwa
+        nowa_nazwa_input = await _zadaj_pytanie(kanal, user, f"Nowa pełna nazwa klubu (lub `Bez zmian` by zachować `{stara_nazwa}`):", client)
         nowa_nazwa = stara_nazwa if nowa_nazwa_input.lower() == "bez zmian" else nowa_nazwa_input.strip()
 
+        # 2. TAG
         while True:
             nowy_tag_input = await _zadaj_pytanie(kanal, user, f"Nowy 3-literowy TAG (lub `Bez zmian` by zachować `{user_club}`):", client)
             if nowy_tag_input.lower() == "bez zmian":
@@ -702,17 +734,28 @@ async def proces_rebrandingu(interaction: discord.Interaction):
                 continue
             break
 
-        if nowy_tag == user_club and nowa_nazwa == stara_nazwa:
-            await kanal.send("❌ Nie wprowadzono żadnych zmian (nazwa i TAG są identyczne). Anulowanie.")
+        # 3. Właściciel
+        nowy_wlasciciel_input = await _zadaj_pytanie(kanal, user, "Nowy Właściciel klubu (oznacz @Właściciel lub `Bez zmian`):", client)
+        nowy_wlasciciel = stary_wlasciciel if nowy_wlasciciel_input.lower() == "bez zmian" else nowy_wlasciciel_input.strip()
+
+        # 4. Zarząd
+        nowy_zarzad_input = await _zadaj_pytanie(kanal, user, "Nowy Zarząd klubu (oznacz @Zarząd, wpisz `Brak` lub `Bez zmian`):", client)
+        nowy_zarzad = stary_zarzad if nowy_zarzad_input.lower() == "bez zmian" else nowy_zarzad_input.strip()
+
+        # Weryfikacja: czy cokolwiek się zmieniło?
+        if (nowy_tag == user_club and nowa_nazwa == stara_nazwa and
+            nowy_wlasciciel == stary_wlasciciel and nowy_zarzad == stary_zarzad):
+            await kanal.send("❌ Nie wprowadzono żadnych zmian w danych klubu. Anulowanie.")
             await asyncio.sleep(3); await kanal.delete(); return
 
-        powod = await _zadaj_pytanie(kanal, user, "Podaj powód zmiany (np. nowy sponsor, nowy sezon):", client)
+        # 5. Powód
+        powod = await _zadaj_pytanie(kanal, user, "Podaj powód wprowadzanych zmian:", client)
 
-        embed = discord.Embed(title=f"🔄 Wniosek o Rebranding", color=0x9b59b6)
-        embed.add_field(name="Stary TAG", value=f"`{user_club}`", inline=True)
-        embed.add_field(name="Nowy TAG", value=f"`{nowy_tag}`", inline=True)
-        embed.add_field(name="Stara nazwa", value=stara_nazwa, inline=True)
-        embed.add_field(name="Nowa nazwa", value=nowa_nazwa, inline=True)
+        embed = discord.Embed(title="⚙️ Wniosek o Aktualizację Klubu", color=0x9b59b6)
+        embed.add_field(name="Klub", value=f"`{user_club}`" if nowy_tag == user_club else f"`{user_club}` ➔ `{nowy_tag}`", inline=True)
+        embed.add_field(name="Nazwa", value=nowa_nazwa if nowa_nazwa == stara_nazwa else f"~~{stara_nazwa}~~ ➔ **{nowa_nazwa}**", inline=True)
+        embed.add_field(name="Właściciel", value=nowy_wlasciciel if nowy_wlasciciel == stary_wlasciciel else f"{nowy_wlasciciel} *(Nowy)*", inline=False)
+        embed.add_field(name="Zarząd", value=nowy_zarzad if nowy_zarzad == stary_zarzad else f"{nowy_zarzad} *(Nowy)*", inline=False)
         embed.add_field(name="Powód", value=powod, inline=False)
         embed.add_field(name="Status", value="⏳ Oczekuje na decyzję Zarządu Federacji", inline=False)
 
@@ -724,16 +767,21 @@ async def proces_rebrandingu(interaction: discord.Interaction):
             await asyncio.sleep(2); await kanal.delete(); return
 
         app_id = database.create_application(
-            app_type="REBRAND_KLUBU", applicant_id=user.id,
+            app_type="ZARZADZANIE_KLUBU", applicant_id=user.id,
             club_name=nowa_nazwa, club_tag=nowy_tag, old_club_tag=user_club,
+            founder_txt=stary_wlasciciel, board_txt=stary_zarzad,
+            new_founder_txt=nowy_wlasciciel, new_board_txt=nowy_zarzad,
             reason=powod
         )
+        tag_display = f"{user_club} ➔ {nowy_tag}" if nowy_tag != user_club else user_club
         await _send_forum_application(guild, kanal, embed,
-                                       f"[REBRAND] {user_club} ➔ {nowy_tag}", app_id)
+                                       f"[ZARZĄDZANIE] {tag_display} – {nowa_nazwa}", app_id)
 
     except TimeoutError:
         pass
     except Exception as e:
-        print(f"[proces_rebrandingu] Błąd: {e}\n{traceback.format_exc()}")
+        print(f"[proces_zarzadzania_klubem] Błąd: {e}\n{traceback.format_exc()}")
         try: await kanal.send(f"❌ Błąd: `{e}`"); await asyncio.sleep(5); await kanal.delete()
         except Exception: pass
+
+proces_rebrandingu = proces_zarzadzania_klubem

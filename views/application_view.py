@@ -77,14 +77,14 @@ class ForumApplicationView(ui.View):
             self.add_item(btn)
 
         # ── Odrzuć ofertę (tylko dla typów niebędących rebrandingiem/rejestracji) ──
-        if app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU", "ROZWIAZANIE_DYSCYPLINARNE"):
+        if app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU", "ZARZADZANIE_KLUBU", "ROZWIAZANIE_DYSCYPLINARNE"):
             btn_rp = ui.Button(label="❌ Odrzuć ofertę", style=discord.ButtonStyle.danger,
                                custom_id=f"app:{self.app_id}:party_reject")
             btn_rp.callback = self.cb_party_reject
             self.add_item(btn_rp)
 
         # ── Historia transferów (tylko dla wniosków dot. gracza) ──
-        if app.get("player_name") and app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU"):
+        if app.get("player_name") and app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU", "ZARZADZANIE_KLUBU"):
             btn_h = ui.Button(label="📜 Poprzednie kluby", style=discord.ButtonStyle.secondary,
                               custom_id=f"app:{self.app_id}:history")
             btn_h.callback = self.cb_history
@@ -536,38 +536,76 @@ class ForumApplicationView(ui.View):
                               f"📢 Twój kontrakt z `{source_club}` został rozwiązany ({tryb}).\n"
                               "Jeśli szukasz nowego klubu, zarejestruj się na Giełdzie Wolnych Agentów!")
 
-        # ─── REBRANDING KLUBU ───
-        elif app_type == "REBRAND_KLUBU":
+        # ─── REBRANDING / ZARZĄDZANIE KLUBEM ───
+        elif app_type in ("REBRAND_KLUBU", "ZARZADZANIE_KLUBU"):
             old_tag = clean_tag(app.get("old_club_tag"))
             new_tag = clean_tag(app.get("club_tag"))
             new_name = app.get("club_name")
+            new_founder_txt = app.get("new_founder_txt")
+            new_board_txt = app.get("new_board_txt")
             c_old = database.get_club(old_tag)
 
-            database.rebrand_club(old_tag, new_tag, new_name)
+            new_owner_ids = extract_ids(new_founder_txt) if new_founder_txt else []
+            new_board_extracted = extract_ids(new_board_txt) if new_board_txt else []
+            all_new_board_ids = set(new_owner_ids + new_board_extracted)
+            rep_id = new_owner_ids[0] if new_owner_ids else (c_old.get("reprezentant_dc") if c_old else None)
 
-            # Zmień nazwy ról na Discordzie
+            database.update_club_full(
+                old_tag=old_tag,
+                new_tag=new_tag,
+                new_name=new_name,
+                new_founder_txt=new_founder_txt,
+                new_board_txt=new_board_txt,
+                new_board_ids=list(all_new_board_ids) if all_new_board_ids else None,
+                new_rep_id=rep_id
+            )
+
+            # Zmień nazwy ról na Discordzie jeśli zmienił się TAG
             if c_old:
                 r_board = guild.get_role(c_old.get("role_board_id", 0))
                 r_player = guild.get_role(c_old.get("role_player_id", 0))
-                if r_board:
+                if r_board and new_tag != old_tag:
                     try: await r_board.edit(name=f"⚽・{new_tag} - Zarząd")
                     except Exception as e: print(f"[Fed] Błąd rebrand roli zarządu: {e}")
-                if r_player:
+                if r_player and new_tag != old_tag:
                     try: await r_player.edit(name=f"⚽・{new_tag} - Zawodnik")
                     except Exception as e: print(f"[Fed] Błąd rebrand roli zawodnika: {e}")
+
+                # Jeśli podano nowe władze (właściciel lub zarząd), zaktualizuj przypisanie ról na serwerze!
+                if r_board and (new_founder_txt or new_board_txt):
+                    old_ids = set(c_old.get("board_ids", []))
+                    if c_old.get("reprezentant_dc"):
+                        old_ids.add(c_old["reprezentant_dc"])
+                    for uid in old_ids:
+                        if uid not in all_new_board_ids:
+                            m = await get_or_fetch_member(guild, uid)
+                            if m:
+                                try: await m.remove_roles(r_board)
+                                except Exception as e: print(f"[Fed] Błąd usunięcia roli zarządu {uid}: {e}")
+                    for uid in all_new_board_ids:
+                        m = await get_or_fetch_member(guild, uid)
+                        if m:
+                            try: await m.add_roles(r_board)
+                            except Exception as e: print(f"[Fed] Błąd nadania nowej roli zarządu {uid}: {e}")
 
             database.set_application_status(self.app_id, "ACCEPTED")
 
             embed = interaction.message.embeds[0]
             embed.color = 0x9b59b6
-            embed.title = f"✅ REBRANDING: `{old_tag}` ➔ `{new_tag}`"
+            embed.title = f"✅ ZARZĄDZANIE: `{old_tag}` ➔ `{new_tag}`" if new_tag != old_tag else f"✅ AKTUALIZACJA: `{new_tag}`"
             embed.add_field(name="Decyzja Federacji",
                             value=f"Zatwierdzone przez {interaction.user.mention}.", inline=False)
             await interaction.message.edit(embed=embed, view=None)
 
             if kom_channel:
+                tag_str = f"`{old_tag}` ➔ `{new_tag}`" if new_tag != old_tag else f"`{new_tag}`"
+                changes = []
+                if new_name and c_old and new_name != c_old.get("name"): changes.append(f"Nazwa: **{new_name}**")
+                if new_founder_txt and new_founder_txt.lower() != "bez zmian": changes.append(f"Właściciel: {new_founder_txt}")
+                if new_board_txt and new_board_txt.lower() != "bez zmian": changes.append(f"Zarząd: {new_board_txt}")
+                details = (" (" + ", ".join(changes) + ")") if changes else ""
                 await kom_channel.send(
-                    f"🔄 **REBRANDING!** Klub `{old_tag}` zmienił nazwę na **{new_name}** (`{new_tag}`)!",
+                    f"⚙️ **AKTUALIZACJA KLUBU!** Klub {tag_str} zaktualizował dane w federacji{details}!",
                     allowed_mentions=discord.AllowedMentions.none()
                 )
 

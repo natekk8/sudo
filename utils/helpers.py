@@ -78,7 +78,7 @@ def has_open_ticket(guild: discord.Guild, user_id: int) -> bool:
                 if overwrite.view_channel and overwrite.send_messages:
                     # Kanał widoczny dla tego użytkownika – sprawdź czy to ticket (prefix nazwy)
                     prefixes = ("rejestracja-", "kontrakt-", "transfer-", "wypozyczenie-",
-                                "aneks-", "rozwiazanie-", "rebrand-")
+                                "aneks-", "rozwiazanie-", "rebrand-", "zarzadzanie-")
                     if any(channel.name.startswith(p) for p in prefixes):
                         return True
     return False
@@ -102,6 +102,53 @@ def parse_expiry_date(user_input: str) -> str | None:
             dt = datetime.strptime(user_input, fmt)
             dt = dt.replace(hour=23, minute=59, second=59)
             if dt < get_now_warsaw(): return None
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            pass
+    return None
+
+def parse_schedule_datetime(user_input: str) -> str | None:
+    """
+    Parsuje datę i godzinę harmonogramu rynku.
+    Obsługuje:
+    - Format względny: '2h', '30m', '3d', '7 dni'
+    - Format bezwzględny: 'DD.MM.YYYY HH:MM', 'YYYY-MM-DD HH:MM', 'DD.MM.YYYY' (godz. 23:59:59) itp.
+    Zwraca string 'YYYY-MM-DD HH:MM:SS' w strefie polskiej lub None.
+    """
+    if not user_input: return None
+    user_input = user_input.strip()
+
+    m_rel = re.match(r'^(\d+)\s*(h|godz|godzin|godziny|m|min|minut|d|dni|day|days)$', user_input, re.IGNORECASE)
+    if m_rel:
+        val = int(m_rel.group(1))
+        unit = m_rel.group(2).lower()
+        now = get_now_warsaw()
+        if unit in ('m', 'min', 'minut'):
+            dt = now + timedelta(minutes=val)
+        elif unit in ('h', 'godz', 'godzin', 'godziny'):
+            dt = now + timedelta(hours=val)
+        else:
+            dt = now + timedelta(days=val)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    formats = [
+        ("%d.%m.%Y %H:%M:%S", False),
+        ("%d.%m.%Y %H:%M", False),
+        ("%Y-%m-%d %H:%M:%S", False),
+        ("%Y-%m-%d %H:%M", False),
+        ("%d/%m/%Y %H:%M:%S", False),
+        ("%d/%m/%Y %H:%M", False),
+        ("%d.%m.%Y", True),
+        ("%Y-%m-%d", True),
+        ("%d/%m/%Y", True),
+    ]
+    for fmt, is_date_only in formats:
+        try:
+            dt = datetime.strptime(user_input, fmt)
+            if is_date_only:
+                dt = dt.replace(hour=23, minute=59, second=59)
+            if dt < get_now_warsaw():
+                return None
             return dt.strftime("%Y-%m-%d %H:%M:%S")
         except ValueError:
             pass
