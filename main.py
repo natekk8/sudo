@@ -91,15 +91,16 @@ async def utworz_kanal_ticket(interaction: discord.Interaction, prefix: str):
     await interaction.response.defer(ephemeral=True)
     guild = interaction.guild
     
+    # POPRAWKA: Kanał widoczny dla wszystkich, ale pisać mogą tylko wybrani
     overwrites = {
-        guild.default_role: discord.PermissionOverwrite(read_messages=False),
-        interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
+        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True)
     }
     
     rola_fed = guild.get_role(ROLE_FEDERACJA_ID)
     if rola_fed:
-        overwrites[rola_fed] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        overwrites[rola_fed] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
 
     nazwa_kanalu = f"{prefix}-{get_ticket_id()}"
     kanal = await guild.create_text_channel(nazwa_kanalu, overwrites=overwrites)
@@ -410,7 +411,7 @@ class WidokPaneluGlownego(ui.View):
 async def setup_panel(ctx):
     embed = discord.Embed(title="🏛️ Panel Sterowania Federacji", color=0x2b2d31)
     embed.description = (
-        "Wybierz akcję z przycisków poniżej. Bot utworzy tymczasowy kanał tekstowy widoczny tylko dla Ciebie, w którym odpowiesz na pytania ankiety, mogąc swobodnie oznaczać (@) użytkowników.\n\n"
+        "Wybierz akcję z przycisków poniżej. Bot utworzy tymczasowy kanał tekstowy, w którym odpowiesz na pytania ankiety, mogąc swobodnie oznaczać (@) użytkowników.\n\n"
         "**Co robią poszczególne przyciski?**\n"
         "**📝 Rejestracja Klubu**\n"
         "Otwiera proces zakładania nowego zespołu. Wymaga podania pełnej nazwy, trzyliterowego skrótu oraz oznaczenia członków zarządu.\n\n"
