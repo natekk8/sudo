@@ -41,6 +41,10 @@ def get_ticket_id():
     save_db(db)
     return f"{count:03d}"
 
+def extract_ids(text: str):
+    if not text: return []
+    return [int(uid) for uid in re.findall(r'<@!?(\d+)>', text)]
+
 def is_federation(member):
     return any(r.id == ROLE_FEDERACJA_ID for r in member.roles)
 
@@ -93,7 +97,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ==========================================
 class WniosekConfirmView(ui.View):
     def __init__(self):
-        # Limit 15 minut (900 sekund) na kliknięcie w podsumowaniu
         super().__init__(timeout=900.0)
         self.value = None
 
@@ -133,7 +136,6 @@ async def zadaj_pytanie(kanal, uzytkownik, pytanie):
     def check(m):
         return m.author == uzytkownik and m.channel == kanal
     try:
-        # Timeout ustawiony dokładnie na 15 minut (900 sekund)
         msg = await bot.wait_for('message', check=check, timeout=900.0)
         return msg.content
     except asyncio.TimeoutError:
@@ -146,13 +148,18 @@ async def zadaj_pytanie(kanal, uzytkownik, pytanie):
 # WIDOKI I PRZYCISKI DO WĄTKÓW (Z FORUM)
 # ==========================================
 class WidokZatwierdzeniaKlubu(ui.View):
-    def __init__(self, nazwa, skrot, zalozyciel_txt, rep_id):
+    def __init__(self, nazwa, skrot, zalozyciel_txt, zarzad_txt, rep_id):
         super().__init__(timeout=None)
-        self.nazwa, self.skrot, self.zalozyciel_txt, self.rep_id = nazwa, skrot, zalozyciel_txt, rep_id
+        self.nazwa = nazwa
+        self.skrot = skrot
+        self.zalozyciel_txt = zalozyciel_txt
+        self.zarzad_txt = zarzad_txt
+        self.rep_id = rep_id
 
     @ui.button(label="Zatwierdź & Utwórz Role", style=discord.ButtonStyle.green, custom_id="btn_appr_club")
     async def zatwierdz(self, interaction: discord.Interaction, button):
-        if not is_federation(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień!", ephemeral=True)
+        if not is_federation(interaction.user): 
+            return await interaction.response.send_message("❌ Brak uprawnień!", ephemeral=True)
         await interaction.response.defer()
 
         guild = interaction.guild
@@ -160,25 +167,44 @@ class WidokZatwierdzeniaKlubu(ui.View):
         r_zarzad = await guild.create_role(name=f"⚽・{self.skrot} - Zarząd", permissions=base_role.permissions, hoist=base_role.hoist)
         r_zawod = await guild.create_role(name=f"⚽・{self.skrot} - Zawodnik", permissions=base_role.permissions, hoist=base_role.hoist)
 
-        member = guild.get_member(self.rep_id)
-        if member: await member.add_roles(r_zarzad)
+        # Wyciągamy wszystkie ID oznaczone w założycielu, zarządzie oraz dodajemy zgłaszającego
+        osoby_do_roli = set(extract_ids(self.zalozyciel_txt) + extract_ids(self.zarzad_txt))
+        osoby_do_roli.add(self.rep_id)
+
+        for uid in osoby_do_roli:
+            member = guild.get_member(uid)
+            if member:
+                await member.add_roles(r_zarzad)
 
         db = load_db()
-        db["kluby"][self.skrot] = {"nazwa": self.nazwa, "rola_zarzad": r_zarzad.id, "rola_zawodnik": r_zawod.id, "reprezentant_dc": self.rep_id}
+        db["kluby"][self.skrot] = {
+            "nazwa": self.nazwa,
+            "rola_zarzad": r_zarzad.id,
+            "rola_zawodnik": r_zawod.id,
+            "reprezentant_dc": self.rep_id
+        }
         save_db(db)
 
         embed = interaction.message.embeds[0]
         embed.color = 0x2ecc71
         embed.title = f"✅ Zaakceptowano: {self.nazwa}"
+        embed.add_field(name="Role Zarządu", value="Automatycznie nadano role oznaczonym osobom.", inline=False)
         await interaction.message.edit(embed=embed, view=None)
+
         kom = interaction.guild.get_channel(CHANNEL_KOMUNIKATY_ID)
-        if kom: await kom.send(f"📢 **NOWY KLUB!** Zespół **{self.nazwa}** (`{self.skrot}`) zarejestrowany!")
+        if kom: 
+            await kom.send(f"📢 **NOWY KLUB!** Zespół **{self.nazwa}** (`{self.skrot}`) został zarejestrowany!")
 
 class WidokPodpisu(ui.View):
     def __init__(self, gracz, kup, sprzed, kwota, klauz, wym_sprzed, typ, wazny_do):
         super().__init__(timeout=None)
-        self.gracz, self.kup, self.sprzed = gracz, kup, sprzed
-        self.kwota, self.klauz, self.wym_sprzed, self.typ = kwota, klauz, wym_sprzed, typ
+        self.gracz = gracz
+        self.kup = kup
+        self.sprzed = sprzed
+        self.kwota = kwota
+        self.klauz = klauz
+        self.wym_sprzed = wym_sprzed
+        self.typ = typ
         self.wazny_do = wazny_do
         self.p_gracz = False
         self.p_sprzed = not wym_sprzed
@@ -226,21 +252,32 @@ class WidokPodpisu(ui.View):
 
     @ui.button(label="✅ Zatwierdź (Federacja)", style=discord.ButtonStyle.green, custom_id="b_fed")
     async def b_fed(self, interaction: discord.Interaction, button):
-        if not is_federation(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień!", ephemeral=True)
+        if not is_federation(interaction.user): 
+            return await interaction.response.send_message("❌ Brak uprawnień!", ephemeral=True)
         
         await interaction.response.defer()
         db = load_db()
         guild = interaction.guild
 
-        if self.gracz_dc_id:
-            member = guild.get_member(self.gracz_dc_id)
+        # Ustalenie ID konta gracza: z kliknięcia osobistego lub z oznaczenia w tekście
+        final_player_id = self.gracz_dc_id
+        if not final_player_id:
+            extracted = extract_ids(self.gracz)
+            if extracted:
+                final_player_id = extracted[0]
+
+        # Automatyczna zmiana ról tylko jeśli gracz posiada/miał oznaczone konto na Discordzie
+        if final_player_id:
+            member = guild.get_member(final_player_id)
             if member:
                 if self.sprzed and self.sprzed in db["kluby"]:
                     old_role = guild.get_role(db["kluby"][self.sprzed].get("rola_zawodnik", 0))
-                    if old_role: await member.remove_roles(old_role)
+                    if old_role: 
+                        await member.remove_roles(old_role)
                 if self.kup in db["kluby"]:
                     new_role = guild.get_role(db["kluby"][self.kup].get("rola_zawodnik", 0))
-                    if new_role: await member.add_roles(new_role)
+                    if new_role: 
+                        await member.add_roles(new_role)
 
         db["zawodnicy"][self.gracz] = {
             "klub": self.kup,
@@ -248,7 +285,7 @@ class WidokPodpisu(ui.View):
             "klauzula": self.klauz,
             "typ": self.typ,
             "wazny_do": self.wazny_do,
-            "gracz_dc_id": self.gracz_dc_id
+            "gracz_dc_id": final_player_id
         }
         save_db(db)
 
@@ -259,7 +296,8 @@ class WidokPodpisu(ui.View):
 
         kom = interaction.guild.get_channel(CHANNEL_KOMUNIKATY_ID)
         akcja = "został wypożyczony do" if self.typ == "WYPOZYCZENIE" else "dołącza do"
-        if kom: await kom.send(f"📢 **OFICJALNIE:** Zawodnik {self.gracz} {akcja} **{db['kluby'][self.kup]['nazwa']}**!\n> Ważność umowy: `{self.wazny_do}` | Klauzula: `{self.klauz}`")
+        if kom: 
+            await kom.send(f"📢 **OFICJALNIE:** Zawodnik {self.gracz} {akcja} **{db['kluby'][self.kup]['nazwa']}**!\n> Ważność umowy: `{self.wazny_do}` | Klauzula: `{self.klauz}`")
 
 # ==========================================
 # PROCESY TICKETÓW (Wywiady z botem)
@@ -301,7 +339,7 @@ async def proces_rejestracji_klubu(interaction):
         
         if view.value:
             forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
-            v_forum = WidokZatwierdzeniaKlubu(nazwa, skrot, zalozyciel, interaction.user.id)
+            v_forum = WidokZatwierdzeniaKlubu(nazwa, skrot, zalozyciel, zarzad, interaction.user.id)
             thread = await forum.create_thread(name=f"[{skrot}] {nazwa}", embed=embed, view=v_forum)
             await kanal.send(f"✅ Wysłano! {thread.thread.mention}. Zamykam kanał...")
         
@@ -322,7 +360,7 @@ async def proces_podpisania(interaction):
                 await kanal.send("❌ Nie jesteś w zarządzie tego klubu!")
             else: break
             
-        gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika (lub wpisz jego imię):")
+        gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika (lub wpisz jego imię jeśli nie ma DC):")
         
         while True:
             czas_input = await zadaj_pytanie(kanal, interaction.user, "Podaj długość kontraktu (np. '30' lub '30 dni', albo datę '30.06.2027'):")
@@ -372,7 +410,7 @@ async def proces_transferu(interaction):
             if sprzed not in db["kluby"]: await kanal.send("❌ Ten klub nie istnieje w bazie!")
             else: break
 
-        gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika (lub wpisz Imię):")
+        gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika (lub wpisz Imię jeśli nie ma DC):")
         kwota = await zadaj_pytanie(kanal, interaction.user, "Kwota transferu:")
         
         while True:
@@ -433,7 +471,7 @@ async def proces_wypozyczenia(interaction):
             if sprzed not in db["kluby"]: await kanal.send("❌ Ten klub nie istnieje w bazie!")
             else: break
 
-        gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika:")
+        gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika (lub wpisz Imię jeśli nie ma DC):")
         
         while True:
             czas_input = await zadaj_pytanie(kanal, interaction.user, "Okres wypożyczenia (np. '30 dni' lub '15.01.2027'):")
