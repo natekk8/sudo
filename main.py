@@ -2,8 +2,9 @@ import os
 import json
 import re
 import asyncio
+from datetime import datetime, timedelta
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import ui
 from dotenv import load_dotenv
 
@@ -21,7 +22,7 @@ CHANNEL_KOMUNIKATY_ID = 1548260354264539196
 DB_FILE = "baza_ligi.json"
 
 # ==========================================
-# BAZA DANYCH I FUNKCJE
+# BAZA DANYCH I FUNKCJE POMOCNICZE
 # ==========================================
 def load_db():
     if not os.path.exists(DB_FILE):
@@ -50,6 +51,28 @@ def has_club_board_role(member, club_tag, db):
 
 def clean_tag(tag: str):
     return tag.strip().upper()
+
+def parse_expiry_date(user_input: str):
+    user_input = user_input.strip()
+    # 1. Wariant liczby dni (np. '30' lub '30 dni')
+    match_days = re.match(r'^(\d+)(\s*(dni|d|day|days))?$', user_input, re.IGNORECASE)
+    if match_days:
+        days = int(match_days.group(1))
+        if days <= 0:
+            return None
+        return (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    
+    # 2. Wariant konkretnej daty DD.MM.RRRR
+    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(user_input, fmt)
+            dt = dt.replace(hour=23, minute=59, second=59)
+            if dt < datetime.now():
+                return None
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            pass
+    return None
 
 async def ping_reprezentantow(thread, kup, sprzed=None):
     db = load_db()
@@ -91,7 +114,6 @@ async def utworz_kanal_ticket(interaction: discord.Interaction, prefix: str):
     await interaction.response.defer(ephemeral=True)
     guild = interaction.guild
     
-    # POPRAWKA: Kanał widoczny dla wszystkich, ale pisać mogą tylko wybrani
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
         interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
@@ -153,9 +175,11 @@ class WidokZatwierdzeniaKlubu(ui.View):
         if kom: await kom.send(f"📢 **NOWY KLUB!** Zespół **{self.nazwa}** (`{self.skrot}`) zarejestrowany!")
 
 class WidokPodpisu(ui.View):
-    def __init__(self, gracz, kup, sprzed, kwota, klauz, wym_sprzed, typ):
+    def __init__(self, gracz, kup, sprzed, kwota, klauz, wym_sprzed, typ, wazny_do):
         super().__init__(timeout=None)
-        self.gracz, self.kup, self.sprzed, self.kwota, self.klauz, self.wym_sprzed, self.typ = gracz, kup, sprzed, kwota, klauz, wym_sprzed, typ
+        self.gracz, self.kup, self.sprzed = gracz, kup, sprzed
+        self.kwota, self.klauz, self.wym_sprzed, self.typ = kwota, klauz, wym_sprzed, typ
+        self.wazny_do = wazny_do
         self.p_gracz = False
         self.p_sprzed = not wym_sprzed
         self.gracz_dc_id = None
@@ -218,7 +242,14 @@ class WidokPodpisu(ui.View):
                     new_role = guild.get_role(db["kluby"][self.kup].get("rola_zawodnik", 0))
                     if new_role: await member.add_roles(new_role)
 
-        db["zawodnicy"][self.gracz] = {"klub": self.kup, "klauzula": self.klauz}
+        db["zawodnicy"][self.gracz] = {
+            "klub": self.kup,
+            "klub_macierzysty": self.sprzed if self.typ == "WYPOZYCZENIE" else self.kup,
+            "klauzula": self.klauz,
+            "typ": self.typ,
+            "wazny_do": self.wazny_do,
+            "gracz_dc_id": self.gracz_dc_id
+        }
         save_db(db)
 
         embed = interaction.message.embeds[0]
@@ -228,7 +259,7 @@ class WidokPodpisu(ui.View):
 
         kom = interaction.guild.get_channel(CHANNEL_KOMUNIKATY_ID)
         akcja = "został wypożyczony do" if self.typ == "WYPOZYCZENIE" else "dołącza do"
-        if kom: await kom.send(f"📢 **OFICJALNIE:** Zawodnik {self.gracz} {akcja} **{db['kluby'][self.kup]['nazwa']}**!\n> Kwota: `{self.kwota}` | Klauzula: `{self.klauz}`")
+        if kom: await kom.send(f"📢 **OFICJALNIE:** Zawodnik {self.gracz} {akcja} **{db['kluby'][self.kup]['nazwa']}**!\n> Ważność umowy: `{self.wazny_do}` | Klauzula: `{self.klauz}`")
 
 # ==========================================
 # PROCESY TICKETÓW (Wywiady z botem)
@@ -259,7 +290,7 @@ async def proces_rejestracji_klubu(interaction):
         embed.add_field(name="Zarząd", value=zarzad, inline=False)
         
         view = WniosekConfirmView()
-        msg = await kanal.send(embed=embed, view=view)
+        await kanal.send(embed=embed, view=view)
         await view.wait()
         
         if view.value:
@@ -285,12 +316,18 @@ async def proces_podpisania(interaction):
             else: break
             
         gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika (lub wpisz jego imię):")
-        czas = await zadaj_pytanie(kanal, interaction.user, "Podaj czas trwania kontraktu (np. 1 sezon):")
+        
+        while True:
+            czas_input = await zadaj_pytanie(kanal, interaction.user, "Podaj długość kontraktu (np. '30' lub '30 dni', albo datę '30.06.2027'):")
+            wazny_do = parse_expiry_date(czas_input)
+            if wazny_do: break
+            await kanal.send("❌ Nieprawidłowy format! Wpisz liczbę dni (np. 14) lub przyszłą datę DD.MM.RRRR.")
+
         klauz = await zadaj_pytanie(kanal, interaction.user, "Podaj kwotę Klauzuli (lub wpisz 'Brak'):")
 
         embed = discord.Embed(title=f"📄 Podpisanie Gracza: {gracz}", color=0x3498db)
         embed.add_field(name="Kupujący", value=f"`{kup}`", inline=True)
-        embed.add_field(name="Czas", value=czas, inline=True)
+        embed.add_field(name="Wygasa", value=f"`{wazny_do}`", inline=True)
         embed.add_field(name="Klauzula", value=klauz, inline=True)
         embed.add_field(name="Status", value="⏳ Oczekuje na podpisy.", inline=False)
 
@@ -300,7 +337,7 @@ async def proces_podpisania(interaction):
         
         if view.value:
             forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
-            v_forum = WidokPodpisu(gracz, kup, None, "0", klauz, False, "BEZ_KLUBU")
+            v_forum = WidokPodpisu(gracz, kup, None, "0", klauz, False, "BEZ_KLUBU", wazny_do)
             thread = await forum.create_thread(name=f"[{kup}] Nowy Gracz: {gracz}", embed=embed, view=v_forum)
             await ping_reprezentantow(thread.thread, kup)
         
@@ -323,6 +360,13 @@ async def proces_transferu(interaction):
 
         gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika (lub wpisz Imię):")
         kwota = await zadaj_pytanie(kanal, interaction.user, "Kwota transferu:")
+        
+        while True:
+            czas_input = await zadaj_pytanie(kanal, interaction.user, "Długość nowego kontraktu (np. '60 dni' lub '31.12.2026'):")
+            wazny_do = parse_expiry_date(czas_input)
+            if wazny_do: break
+            await kanal.send("❌ Błędny termin! Podaj liczbę dni lub datę DD.MM.RRRR.")
+
         klauz = await zadaj_pytanie(kanal, interaction.user, "Nowa Klauzula (lub wpisz 'Brak'):")
 
         czy_klauzula = False
@@ -337,7 +381,8 @@ async def proces_transferu(interaction):
         embed.add_field(name="Kupujący", value=f"`{kup}`", inline=True)
         embed.add_field(name="Sprzedający", value=f"`{sprzed}`", inline=True)
         embed.add_field(name="Kwota", value=kwota, inline=True)
-        embed.add_field(name="Nowa Klauzula", value=klauz, inline=False)
+        embed.add_field(name="Nowa Klauzula", value=klauz, inline=True)
+        embed.add_field(name="Wygasa", value=f"`{wazny_do}`", inline=False)
         embed.add_field(name="Status", value="⚡ Zgoda niewymagana." if czy_klauzula else "⏳ Oczekuje na zgody.", inline=False)
 
         view = WniosekConfirmView()
@@ -346,7 +391,7 @@ async def proces_transferu(interaction):
         
         if view.value:
             forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
-            v_forum = WidokPodpisu(gracz, kup, sprzed, kwota, klauz, wym_sprzed, "TRANSFER")
+            v_forum = WidokPodpisu(gracz, kup, sprzed, kwota, klauz, wym_sprzed, "TRANSFER", wazny_do)
             thread = await forum.create_thread(name=f"[{kup}] Transfer: {gracz}", embed=embed, view=v_forum)
             await ping_reprezentantow(thread.thread, kup, sprzed)
         
@@ -368,14 +413,20 @@ async def proces_wypozyczenia(interaction):
             else: break
 
         gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika:")
-        czas = await zadaj_pytanie(kanal, interaction.user, "Czas trwania:")
+        
+        while True:
+            czas_input = await zadaj_pytanie(kanal, interaction.user, "Okres wypożyczenia (np. '30 dni' lub '15.01.2027'):")
+            wazny_do = parse_expiry_date(czas_input)
+            if wazny_do: break
+            await kanal.send("❌ Błędny termin! Podaj liczbę dni lub datę DD.MM.RRRR.")
+
         kwota = await zadaj_pytanie(kanal, interaction.user, "Opłata za wypożyczenie (lub 'Brak'):")
 
         embed = discord.Embed(title=f"⏱️ Wypożyczenie: {gracz}", color=0x1abc9c)
         embed.add_field(name="Przyjmujący", value=f"`{kup}`", inline=True)
         embed.add_field(name="Oddający", value=f"`{sprzed}`", inline=True)
         embed.add_field(name="Opłata", value=kwota, inline=True)
-        embed.add_field(name="Czas", value=czas, inline=False)
+        embed.add_field(name="Koniec wypożyczenia", value=f"`{wazny_do}`", inline=False)
         embed.add_field(name="Status", value="⏳ Oczekuje na zgody.", inline=False)
 
         view = WniosekConfirmView()
@@ -384,12 +435,82 @@ async def proces_wypozyczenia(interaction):
         
         if view.value:
             forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
-            v_forum = WidokPodpisu(gracz, kup, sprzed, kwota, "Bez zmian", True, "WYPOZYCZENIE")
+            v_forum = WidokPodpisu(gracz, kup, sprzed, kwota, "Bez zmian", True, "WYPOZYCZENIE", wazny_do)
             thread = await forum.create_thread(name=f"[{kup}] Wypożyczenie: {gracz}", embed=embed, view=v_forum)
             await ping_reprezentantow(thread.thread, kup, sprzed)
         
         await kanal.delete()
     except Exception: pass
+
+# ==========================================
+# PĘTLA W TLE (AUTOMATYCZNE WYGASANIE UMÓW)
+# ==========================================
+@tasks.loop(minutes=60)
+async def check_expirations():
+    await bot.wait_until_ready()
+    db = load_db()
+    guild = bot.guilds[0] if bot.guilds else None
+    if not guild: return
+
+    kom_channel = guild.get_channel(CHANNEL_KOMUNIKATY_ID)
+    now = datetime.now()
+    zawodnicy = list(db.get("zawodnicy", {}).items())
+
+    for gracz_nazwa, dane in zawodnicy:
+        wazny_do_str = dane.get("wazny_do")
+        if not wazny_do_str: continue
+
+        try:
+            wazny_do = datetime.strptime(wazny_do_str, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+
+        if now >= wazny_do:
+            typ = dane.get("typ")
+            klub_obecny = dane.get("klub")
+            klub_macierzysty = dane.get("klub_macierzysty")
+            dc_id = dane.get("gracz_dc_id")
+            member = guild.get_member(dc_id) if dc_id else None
+
+            if typ == "WYPOZYCZENIE":
+                # Koniec wypożyczenia -> powrót do klubu macierzystego
+                if member:
+                    if klub_obecny in db["kluby"]:
+                        r_temp = guild.get_role(db["kluby"][klub_obecny].get("rola_zawodnik", 0))
+                        if r_temp: await member.remove_roles(r_temp)
+                    if klub_macierzysty in db["kluby"]:
+                        r_mac = guild.get_role(db["kluby"][klub_macierzysty].get("rola_zawodnik", 0))
+                        if r_mac: await member.add_roles(r_mac)
+
+                db["zawodnicy"][gracz_nazwa]["klub"] = klub_macierzysty
+                db["zawodnicy"][gracz_nazwa]["typ"] = "TRANSFER"
+                db["zawodnicy"][gracz_nazwa]["wazny_do"] = None
+                save_db(db)
+
+                if kom_channel:
+                    nazwa_obecny = db["kluby"].get(klub_obecny, {}).get("nazwa", klub_obecny)
+                    nazwa_macierz = db["kluby"].get(klub_macierzysty, {}).get("nazwa", klub_macierzysty)
+                    await kom_channel.send(
+                        f"⏱️ **KONIEC WYPOŻYCZENIA!**\n"
+                        f"> Zawodnik **{gracz_nazwa}** zakończył okres wypożyczenia w **{nazwa_obecny}** i wraca do macierzystego klubu **{nazwa_macierz}** (`{klub_macierzysty}`)!"
+                    )
+
+            else:
+                # Wygasł kontrakt stały -> gracz traci klub
+                if member and klub_obecny in db["kluby"]:
+                    r_zaw = guild.get_role(db["kluby"][klub_obecny].get("rola_zawodnik", 0))
+                    if r_zaw: await member.remove_roles(r_zaw)
+
+                del db["zawodnicy"][gracz_nazwa]
+                save_db(db)
+
+                if kom_channel:
+                    nazwa_klub = db["kluby"].get(klub_obecny, {}).get("nazwa", klub_obecny)
+                    await kom_channel.send(
+                        f"📢 **WYGAŚNIĘCIE KONTRAKTU!**\n"
+                        f"> Kontrakt zawodnika **{gracz_nazwa}** z drużyną **{nazwa_klub}** (`{klub_obecny}`) dobiegł końca.\n"
+                        f"> Zawodnik staje się graczem bez klubu!"
+                    )
 
 # ==========================================
 # GŁÓWNY PANEL STARTOWY
@@ -424,5 +545,12 @@ async def setup_panel(ctx):
     )
     await ctx.send(embed=embed, view=WidokPaneluGlownego())
     await ctx.message.delete()
+
+@bot.event
+async def on_ready():
+    bot.add_view(WidokPaneluGlownego())
+    if not check_expirations.is_running():
+        check_expirations.start()
+    print(f"Bot Federacji zalogowany jako: {bot.user}")
 
 bot.run(os.getenv("DISCORD_TOKEN"))
