@@ -16,6 +16,9 @@ ROLA_WZORZEC_ID = int(os.getenv("ROLA_WZORZEC_ID", "1545869511318708244"))
 CHANNEL_FORUM_ID = int(os.getenv("CHANNEL_FORUM_ID", "1548260165134852157"))
 CHANNEL_KOMUNIKATY_ID = int(os.getenv("CHANNEL_KOMUNIKATY_ID", "1548260354264539196"))
 
+# ID Serwera (gildii) – opcjonalne, zwiększa niezawodność bota na wielu serwerach
+GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+
 # Zasady ligi
 MAX_PLAYERS_PER_CLUB = int(os.getenv("MAX_PLAYERS_PER_CLUB", "3"))
 

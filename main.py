@@ -1,9 +1,9 @@
-import os
 import discord
 from discord.ext import commands
-from config import DISCORD_TOKEN
+from config import DISCORD_TOKEN, GUILD_ID
 import database
 from views.main_panel import WidokPaneluGlownego
+from views.market_panel import WidokRynkuTransferowego
 from views.application_view import ForumApplicationView
 from tasks.expirations import setup_expirations_task
 
@@ -15,33 +15,66 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-expirations_task = setup_expirations_task(bot)
+expirations_task = setup_expirations_task(bot, guild_id=GUILD_ID or None)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup_panel(ctx):
-    embed = discord.Embed(title="🏛️ Panel Sterowania Federacji", color=0x2b2d31)
-    embed.description = (
-        "Wybierz akcję z przycisków poniżej. Bot utworzy tymczasowy kanał tekstowy, w którym odpowiesz na pytania ankiety, mogąc swobodnie oznaczać (@) użytkowników.\n\n"
-        "**Co robią poszczególne przyciski?**\n"
-        "**📝 Rejestracja Klubu**\n"
-        "Otwiera proces zakładania nowego zespołu. Wymaga podania pełnej nazwy, trzyliterowego skrótu oraz oznaczenia członków zarządu.\n\n"
-        "**👤 Podpisanie gracza (bez klubu)**\n"
-        "Pozwala zarejestrować zawodnika, który obecnie nie znajduje się w żadnej bazie klubowej (tzw. wolny transfer). Obowiązuje limit maksymalnie 3 graczy w klubie.\n\n"
-        "**🤝 Wniosek Transferowy**\n"
-        "Rozpoczyna proces kupna gracza z innej drużyny. Jeśli wpisana kwota jest równa lub wyższa od klauzuli, zgoda sprzedającego nie jest wymagana (wykup klauzulowy). Po sfinalizowaniu transferu bot utworzy automatyczny kanał do ustalenia kontraktu.\n\n"
-        "**⏱️ Wypożyczenie**\n"
-        "Tymczasowe przejście zawodnika do innej drużyny na ustalony czas. Po zakończeniu wypożyczenia zawodnik automatycznie powraca do macierzystego klubu."
+    """
+    Wysyła DWA panele:
+    1️⃣ Biuro Federacji – rejestracje i wnioski (Rejestracja, Podpisanie, Transfer, Wypożyczenie)
+    2️⃣ Rynek Transferowy – giełda graczy i przegląd składów
+    """
+    # ─── Wiadomość 1: Biuro Federacji ───
+    embed1 = discord.Embed(
+        title="🏛️ Biuro Federacji",
+        description=(
+            "Oficjalne procesy rejestracyjno-transferowe. Bot otworzy tymczasowy kanał, "
+            "gdzie odpiszesz na pytania ankiety możesz swobodnie oznaczać (@) użytkowników.\n\n"
+            "**📝 Rejestracja Klubu**\n"
+            "Zakładanie nowego zespołu. Potrzebna pełna nazwa, 3-literowy skrót i oznaczenie zarządu.\n\n"
+            "**👤 Podpisanie Gracza**\n"
+            "Rejestracja wolnego agenta (bez aktywnego kontraktu). Limit: 3 graczy / klub.\n\n"
+            "**🤝 Wniosek Transferowy**\n"
+            "Kupno gracza z innej drużyny. Wykup klauzulowy nie wymaga zgody sprzedającego.\n\n"
+            "**⏱️ Wypożyczenie**\n"
+            "Tymczasowe przejście zawodnika. Po terminie gracz automatycznie wraca do macierzystego klubu."
+        ),
+        color=0x2b2d31
     )
-    await ctx.send(embed=embed, view=WidokPaneluGlownego())
-    await ctx.message.delete()
+    embed1.set_footer(text="Liga Federacji • Biuro")
+    await ctx.send(embed=embed1, view=WidokPaneluGlownego())
+
+    # ─── Wiadomość 2: Rynek Transferowy ───
+    embed2 = discord.Embed(
+        title="📊 Rynek Transferowy",
+        description=(
+            "Giełda graczy i baza składów.\n\n"
+            "**🙋 Szukam Klubu**\n"
+            "Zarejestruj się jako wolny agent – widoczny dla zarządów. "
+            "Kliknij ponownie, aby usunąć się z listy.\n\n"
+            "**🔍 Szukam Zawodnika**\n"
+            "Podgląd listy graczy bez aktywnego kontraktu, szukających nowego klubu.\n\n"
+            "**📋 Składy Drużyn**\n"
+            "Przeglądaj pełne kadry wszystkich zarejestrowanych drużyn z wizualnym paskiem zapełnienia."
+        ),
+        color=0x1e1f22
+    )
+    embed2.set_footer(text="Liga Federacji • Rynek")
+    await ctx.send(embed=embed2, view=WidokRynkuTransferowego())
+
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
 
 @bot.event
 async def on_ready():
-    # Rejestracja trwałego widoku panelu startowego
+    # Rejestracja trwałych widoków (persistence after restart)
     bot.add_view(WidokPaneluGlownego())
+    bot.add_view(WidokRynkuTransferowego())
 
-    # Przywrócenie trwałych widoków dla wszystkich otwartych wniosków na forum
+    # Przywrócenie widoków dla wszystkich otwartych wniosków
     pending_apps = database.get_pending_applications()
     restored = 0
     for app in pending_apps:
@@ -53,13 +86,13 @@ async def on_ready():
             except Exception as e:
                 print(f"[on_ready] Błąd przywracania widoku dla wniosku #{app['id']}: {e}")
 
-    print(f"Przywrócono {restored} aktywnych widoków wniosków z bazy SQLite.")
+    print(f"[on_ready] Przywrócono {restored} aktywnych widoków wniosków z bazy SQLite.")
 
-    # Uruchomienie cyklicznego sprawdzania kontraktów i wypożyczeń
+    # Uruchomienie zadania sprawdzającego kontrakty co 30 minut
     if not expirations_task.is_running():
         expirations_task.start()
 
-    print(f"Bot Federacji zalogowany pomyślnie jako: {bot.user}")
+    print(f"[on_ready] Bot Federacji zalogowany jako: {bot.user} | Guild ID: {GUILD_ID or 'auto'}")
 
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
