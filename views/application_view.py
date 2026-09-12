@@ -1,3 +1,4 @@
+import re
 import discord
 from discord import ui
 import database
@@ -21,6 +22,145 @@ _HISTORY_EMOJIS = {
     "ROZWIAZANIE_DYSCYPLINARNE": "⚖️",
     "WYGASNIECIE": "📄",
 }
+
+
+def _reconstruct_app_from_message(message: discord.Message, app_id: int, guild: discord.Guild = None) -> dict | None:
+    """Awaryjnie odtwarza dane wniosku bezpośrednio z embeda wiadomości na Discordzie,
+    gdy z jakiegokolwiek powodu w bazie SQLite brakuje rekordu app_id."""
+    if not message or not message.embeds:
+        return None
+    embed = message.embeds[0]
+    title = (embed.title or "").strip()
+
+    app_type = None
+    if "PODPISANIE" in title.upper():
+        app_type = "PODPISANIE"
+    elif "TRANSFER" in title.upper():
+        app_type = "TRANSFER"
+    elif "WYPOŻYCZENIE" in title.upper() or "WYPOZYCZENIE" in title.upper():
+        app_type = "WYPOZYCZENIE"
+    elif "ANEKS" in title.upper():
+        app_type = "ANEKS"
+    elif "ROZWIĄZANIE" in title.upper() or "ROZWIAZANIE" in title.upper():
+        app_type = "ROZWIAZANIE_DYSCYPLINARNE" if "dyscyplinar" in title.lower() else "ROZWIAZANIE_POLUBOWNE"
+    elif "REJESTRACJA" in title.upper() or "PODSUMOWANIE:" in title.upper():
+        app_type = "REJESTRACJA_KLUBU"
+    elif "ZARZĄDZANIE" in title.upper() or "ZARZADZANIE" in title.upper() or "AKTUALIZACJA" in title.upper():
+        app_type = "ZARZADZANIE_KLUBU"
+
+    if not app_type:
+        return None
+
+    fields = {f.name.lower().strip(): (f.value or "").strip() for f in embed.fields}
+
+    player_name = None
+    player_dc_id = None
+    z_val = fields.get("zawodnik")
+    if z_val:
+        uids = extract_ids(z_val)
+        if uids:
+            player_dc_id = uids[0]
+        m_name = re.search(r"\((.*?)\)", z_val)
+        if m_name:
+            player_name = m_name.group(1).strip()
+        elif "`" in z_val:
+            m_code = re.search(r"`(.*?)`", z_val)
+            if m_code:
+                player_name = m_code.group(1).strip()
+        if not player_name and player_dc_id and guild:
+            mem = guild.get_member(player_dc_id)
+            if mem:
+                player_name = mem.display_name
+        if not player_name:
+            player_name = re.sub(r"<@!?\d+>", "", z_val).strip()
+
+    if not player_name and ":" in title:
+        player_name = title.split(":", 1)[1].strip()
+
+    target_club = None
+    for k in ["klub", "do klubu", "skrót"]:
+        if k in fields:
+            target_club = clean_tag(re.sub(r"[`\s]", "", fields[k]))
+            break
+
+    source_club = None
+    if "z klubu" in fields:
+        source_club = clean_tag(re.sub(r"[`\s]", "", fields["z klubu"]))
+
+    expires_at = None
+    for k in ["wygasa", "nowy kontrakt do", "koniec wypożyczenia"]:
+        if k in fields:
+            val = fields[k]
+            m_date = re.search(r"\((.*?)\)", val)
+            if m_date:
+                expires_at = m_date.group(1).strip()
+            elif "`" in val:
+                m_code = re.search(r"`(.*?)`", val)
+                if m_code:
+                    expires_at = m_code.group(1).strip()
+            else:
+                expires_at = re.sub(r"<t:\d+:[a-zA-Z]>", "", val).strip()
+            break
+
+    clause = "Brak"
+    for k in ["klauzula", "nowa klauzula"]:
+        if k in fields:
+            clause = fields[k].replace("`", "").strip()
+            break
+
+    amount = "Brak"
+    for k in ["kwota", "opłata"]:
+        if k in fields:
+            amount = fields[k].replace("`", "").strip()
+            break
+
+    founder_txt = fields.get("właściciel") or fields.get("wnioskodawca")
+    board_txt = fields.get("zarząd")
+    club_name = None
+    if app_type == "REJESTRACJA_KLUBU":
+        if ":" in title:
+            club_name = title.split(":", 1)[1].strip()
+
+    # Jeśli klub nie istnieje w bazie, spróbuj odnaleźć rolę na Discordzie
+    if target_club and not database.get_club(target_club) and guild:
+        for role in guild.roles:
+            if role.name.startswith(f"⚽・{target_club}") and "Zarząd" in role.name:
+                r_player = None
+                for r2 in guild.roles:
+                    if r2.name.startswith(f"⚽・{target_club}") and "Zawodnik" in r2.name:
+                        r_player = r2
+                        break
+                if r_player:
+                    database.add_club(
+                        tag=target_club,
+                        name=f"Klub {target_club}",
+                        role_board_id=role.id,
+                        role_player_id=r_player.id,
+                        founder_txt="Auto-odtworzony z ról",
+                        board_txt="Auto-odtworzony z ról"
+                    )
+                break
+
+    app_data = {
+        "id": app_id,
+        "type": app_type,
+        "applicant_id": None,
+        "club_name": club_name,
+        "club_tag": target_club if app_type == "REJESTRACJA_KLUBU" else None,
+        "player_name": player_name or f"Zawodnik #{app_id}",
+        "player_discord_id": player_dc_id,
+        "target_club": target_club,
+        "source_club": source_club,
+        "amount": amount,
+        "clause": clause,
+        "expires_at": expires_at or "30.06.2027",
+        "is_buyout": 0,
+        "status": "PROCESSING",
+        "thread_id": message.channel.id if hasattr(message.channel, "id") else None,
+        "message_id": message.id
+    }
+    database.restore_application(app_data)
+    return app_data
 
 
 class ForumApplicationView(ui.View):
@@ -107,6 +247,11 @@ class ForumApplicationView(ui.View):
 
     async def cb_player_agree(self, interaction: discord.Interaction):
         app = database.get_application(self.app_id)
+        if not app and interaction.message:
+            app = _reconstruct_app_from_message(interaction.message, self.app_id, interaction.guild)
+            if app:
+                database.revert_application_status(self.app_id, "PENDING")
+                app["status"] = "PENDING"
         if not app or app.get("status") not in ("PENDING", "PROCESSING"):
             return await interaction.response.send_message("❌ Ten wniosek jest już zamknięty.", ephemeral=True)
         if interaction.user.id != app.get("player_discord_id"):
@@ -120,6 +265,11 @@ class ForumApplicationView(ui.View):
 
     async def cb_target_agree(self, interaction: discord.Interaction):
         app = database.get_application(self.app_id)
+        if not app and interaction.message:
+            app = _reconstruct_app_from_message(interaction.message, self.app_id, interaction.guild)
+            if app:
+                database.revert_application_status(self.app_id, "PENDING")
+                app["status"] = "PENDING"
         if not app or app.get("status") not in ("PENDING", "PROCESSING"):
             return await interaction.response.send_message("❌ Ten wniosek jest już zamknięty.", ephemeral=True)
         target = app.get("target_club")
@@ -134,6 +284,11 @@ class ForumApplicationView(ui.View):
 
     async def cb_source_agree(self, interaction: discord.Interaction):
         app = database.get_application(self.app_id)
+        if not app and interaction.message:
+            app = _reconstruct_app_from_message(interaction.message, self.app_id, interaction.guild)
+            if app:
+                database.revert_application_status(self.app_id, "PENDING")
+                app["status"] = "PENDING"
         if not app or app.get("status") not in ("PENDING", "PROCESSING"):
             return await interaction.response.send_message("❌ Ten wniosek jest już zamknięty.", ephemeral=True)
         source = app.get("source_club")
@@ -148,6 +303,11 @@ class ForumApplicationView(ui.View):
 
     async def cb_party_reject(self, interaction: discord.Interaction):
         app = database.get_application(self.app_id)
+        if not app and interaction.message:
+            app = _reconstruct_app_from_message(interaction.message, self.app_id, interaction.guild)
+            if app:
+                database.revert_application_status(self.app_id, "PENDING")
+                app["status"] = "PENDING"
         if not app or app.get("status") not in ("PENDING", "PROCESSING"):
             return await interaction.response.send_message("❌ Ten wniosek jest już zamknięty.", ephemeral=True)
 
@@ -249,8 +409,26 @@ class ForumApplicationView(ui.View):
                     ephemeral=True
                 )
 
-            return await interaction.followup.send(
-                "❌ Ten wniosek jest już przetwarzany lub został wcześniej zamknięty/odrzucony.", ephemeral=True)
+            # Sprawdzenie czy embed na Discordzie nie jest już oznaczony jako zaakceptowany/odrzucony
+            if interaction.message and interaction.message.embeds:
+                emb = interaction.message.embeds[0]
+                e_title = emb.title or ""
+                if (emb.color and emb.color.value == 0x2ecc71) or e_title.startswith("✅"):
+                    try: await self._archive_thread(interaction.channel)
+                    except Exception: pass
+                    return await interaction.followup.send(
+                        "✅ Ten wniosek został już wcześniej zaakceptowany.", ephemeral=True)
+                if (emb.color and emb.color.value == 0xe74c3c) or e_title.startswith("❌"):
+                    try: await self._archive_thread(interaction.channel)
+                    except Exception: pass
+                    return await interaction.followup.send(
+                        "❌ Ten wniosek został wcześniej odrzucony.", ephemeral=True)
+
+            # Awaryjna rekonstrukcja wniosku bezpośrednio z embeda wiadomości
+            app = _reconstruct_app_from_message(interaction.message, self.app_id, interaction.guild)
+            if not app:
+                return await interaction.followup.send(
+                    "❌ Ten wniosek jest już przetwarzany lub został wcześniej zamknięty/odrzucony.", ephemeral=True)
 
         app_type = app.get("type")
         guild = interaction.guild
@@ -698,8 +876,18 @@ class ForumApplicationView(ui.View):
                 app = database.try_claim_application_for_approval(self.app_id)
 
         if not app:
-            return await interaction.followup.send(
-                "❌ Ten wniosek jest już przetwarzany lub został wcześniej zamknięty/odrzucony.", ephemeral=True)
+            if interaction.message and interaction.message.embeds:
+                emb = interaction.message.embeds[0]
+                e_title = emb.title or ""
+                if (emb.color and emb.color.value == 0x2ecc71) or e_title.startswith("✅"):
+                    return await interaction.followup.send("✅ Ten wniosek został już wcześniej zaakceptowany.", ephemeral=True)
+                if (emb.color and emb.color.value == 0xe74c3c) or e_title.startswith("❌"):
+                    return await interaction.followup.send("❌ Ten wniosek został wcześniej odrzucony.", ephemeral=True)
+
+            app = _reconstruct_app_from_message(interaction.message, self.app_id, interaction.guild)
+            if not app:
+                return await interaction.followup.send(
+                    "❌ Ten wniosek jest już przetwarzany lub został wcześniej zamknięty/odrzucony.", ephemeral=True)
 
         database.set_application_status(self.app_id, "REJECTED", rejected_by=f"Federacja ({interaction.user.mention})")
 

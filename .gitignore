@@ -1,0 +1,27 @@
+﻿# Bazy danych SQLite
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite3
+test_*.db
+liga.db
+liga_persistent.db
+liga_backup_*.db
+
+# Środowisko i konfiguracja
+.env
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logi i pliki tymczasowe
+*.log
+scratch/
+.system_generated/

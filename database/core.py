@@ -1,11 +1,73 @@
 import sqlite3
 import os
+import shutil
 import threading
 from contextlib import contextmanager
 import config
 from config import LEGACY_JSON_DB
 
 _lock = threading.Lock()
+PERSISTENT_BACKUP_PATH = getattr(config, "PERSISTENT_BACKUP_PATH", "liga_persistent.db")
+
+def _is_test_env() -> bool:
+    db_name = os.path.basename(getattr(config, "DB_PATH", "")).lower()
+    return "test" in db_name or "temp" in db_name
+
+def sync_persistent_backup():
+    """Tworzy bezpieczną kopię bazy produkcyjnej do PERSISTENT_BACKUP_PATH."""
+    if _is_test_env():
+        return
+    try:
+        db_path = getattr(config, "DB_PATH", "liga.db")
+        if os.path.exists(db_path) and os.path.getsize(db_path) > 0:
+            shutil.copy2(db_path, PERSISTENT_BACKUP_PATH)
+    except Exception as e:
+        print(f"[DB] Błąd tworzenia trwałego backupu: {e}")
+
+def _try_restore_from_persistent():
+    """Przywraca bazę z PERSISTENT_BACKUP_PATH jeśli DB_PATH nie istnieje lub jest pusta, a persistent ma dane."""
+    if _is_test_env():
+        return
+    try:
+        db_path = getattr(config, "DB_PATH", "liga.db")
+        if not os.path.exists(PERSISTENT_BACKUP_PATH):
+            return
+
+        # Sprawdź czy persistent ma tabele i dane
+        p_conn = sqlite3.connect(PERSISTENT_BACKUP_PATH)
+        p_cur = p_conn.cursor()
+        p_clubs = 0
+        p_players = 0
+        try:
+            p_clubs = p_cur.execute("SELECT COUNT(*) FROM clubs").fetchone()[0]
+            p_players = p_cur.execute("SELECT COUNT(*) FROM players").fetchone()[0]
+        except Exception:
+            pass
+        p_conn.close()
+
+        if p_clubs == 0 and p_players == 0:
+            return
+
+        # Sprawdź czy obecna baza DB_PATH ma dane
+        current_has_data = False
+        if os.path.exists(db_path):
+            try:
+                c_conn = sqlite3.connect(db_path)
+                c_cur = c_conn.cursor()
+                c_clubs = c_cur.execute("SELECT COUNT(*) FROM clubs").fetchone()[0]
+                c_players = c_cur.execute("SELECT COUNT(*) FROM players").fetchone()[0]
+                c_conn.close()
+                if c_clubs > 0 or c_players > 0:
+                    current_has_data = True
+            except Exception:
+                pass
+
+        if not current_has_data:
+            print(f"[DB] WYKRYTO PUSTĄ BAZĘ {db_path}! Przywracanie z trwałego backupu {PERSISTENT_BACKUP_PATH} ({p_clubs} klubów, {p_players} graczy)...")
+            shutil.copy2(PERSISTENT_BACKUP_PATH, db_path)
+            print("[DB] ✅ Pomyślnie przywrócono bazę z trwałego backupu!")
+    except Exception as e:
+        print(f"[DB] Błąd auto-przywracania z trwałego backupu: {e}")
 
 @contextmanager
 def get_connection():
@@ -54,6 +116,7 @@ def _migrate_columns(cursor):
             cursor.execute(f"ALTER TABLE free_agents ADD COLUMN {col} {typ}")
 
 def init_db():
+    _try_restore_from_persistent()
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -168,6 +231,8 @@ def init_db():
             cursor.execute("INSERT OR IGNORE INTO counters (name, value) VALUES ('ticket_counter', 0)")
             conn.commit()
 
+    sync_persistent_backup()
+
     if os.path.exists(LEGACY_JSON_DB):
         try:
             os.remove(LEGACY_JSON_DB)
@@ -196,6 +261,8 @@ def reset_database_for_new_season():
                 cursor.execute("VACUUM")
             except Exception:
                 pass
+
+    sync_persistent_backup()
 
     if os.path.exists(LEGACY_JSON_DB):
         try:

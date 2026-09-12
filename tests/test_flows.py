@@ -261,3 +261,154 @@ class TestAsyncApplicationView(unittest.IsolatedAsyncioTestCase):
         saved = database.get_player("FallbackPlayer")
         self.assertIsNotNone(saved)
         self.assertEqual(saved["club_tag"], "FCB")
+
+    def test_restore_application_upsert(self):
+        app_data = {
+            "id": 901,
+            "type": "PODPISANIE",
+            "applicant_id": 12345,
+            "player_name": "TestRestored",
+            "player_discord_id": 55555,
+            "target_club": "FCB",
+            "clause": "100k",
+            "expires_at": "30.06.2027",
+            "status": "PENDING"
+        }
+        res_id = database.restore_application(app_data)
+        self.assertEqual(res_id, 901)
+        app = database.get_application(901)
+        self.assertIsNotNone(app)
+        self.assertEqual(app["player_name"], "TestRestored")
+        self.assertEqual(app["target_club"], "FCB")
+
+    def test_reconstruct_app_from_message_podpisanie(self):
+        import discord
+        from unittest.mock import MagicMock
+        from views.application_view import _reconstruct_app_from_message
+
+        msg = MagicMock()
+        msg.channel.id = 1234
+        msg.id = 5678
+        embed = discord.Embed(title="👤 PODPISANIE: Robert Lewandowski")
+        embed.add_field(name="Zawodnik", value="<@4444> (Robert Lewandowski)")
+        embed.add_field(name="Klub", value="`FCB`")
+        embed.add_field(name="Wygasa", value="<t:1790000000:d> (20.09.2026)")
+        embed.add_field(name="Klauzula", value="`250k`")
+        msg.embeds = [embed]
+
+        guild = MagicMock()
+        guild.roles = []
+        guild.get_member.return_value = None
+
+        app = _reconstruct_app_from_message(msg, 902, guild)
+        self.assertIsNotNone(app)
+        self.assertEqual(app["id"], 902)
+        self.assertEqual(app["type"], "PODPISANIE")
+        self.assertEqual(app["player_name"], "Robert Lewandowski")
+        self.assertEqual(app["player_discord_id"], 4444)
+        self.assertEqual(app["target_club"], "FCB")
+        self.assertEqual(app["clause"], "250k")
+        self.assertEqual(app["expires_at"], "20.09.2026")
+
+        saved = database.get_application(902)
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved["player_name"], "Robert Lewandowski")
+
+    async def test_cb_fed_accept_with_reconstruction_fallback(self):
+        import discord
+        from unittest.mock import AsyncMock, MagicMock
+        from views.application_view import ForumApplicationView
+        from config import ROLE_FEDERACJA_ID
+
+        # Wniosek 903 NIE istnieje w bazie SQLite
+        self.assertIsNone(database.get_application(903))
+
+        view = ForumApplicationView(903)
+        interaction = MagicMock()
+        fed_role = MagicMock()
+        fed_role.id = ROLE_FEDERACJA_ID
+        interaction.user.roles = [fed_role]
+        interaction.user.mention = "<@111>"
+        interaction.channel = MagicMock()
+        interaction.channel.id = 555
+        interaction.channel.edit = AsyncMock()
+        interaction.client.get_channel.return_value.send = AsyncMock()
+        interaction.client.fetch_user = AsyncMock()
+
+        msg = MagicMock()
+        msg.channel.id = 555
+        msg.id = 8888
+        embed = discord.Embed(title="👤 PODPISANIE: Odtworzony Gracz")
+        embed.add_field(name="Zawodnik", value="<@7777> (Odtworzony Gracz)")
+        embed.add_field(name="Klub", value="`FCB`")
+        embed.add_field(name="Wygasa", value="30.06.2027")
+        embed.add_field(name="Klauzula", value="`50k`")
+        embed.add_field(name="Status", value="Oczekuje na akceptację...")
+        msg.embeds = [embed]
+        msg.edit = AsyncMock()
+
+        interaction.message = msg
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+
+        member = MagicMock()
+        member.add_roles = AsyncMock()
+        interaction.guild.get_member.return_value = member
+        interaction.guild.get_role.return_value = MagicMock()
+
+        await view.cb_fed_accept(interaction)
+
+        # Sprawdź czy wniosek został pomyślnie zaakceptowany
+        app = database.get_application(903)
+        self.assertIsNotNone(app)
+        self.assertEqual(app["status"], "ACCEPTED")
+        p = database.get_player("Odtworzony Gracz")
+        self.assertIsNotNone(p)
+        self.assertEqual(p["club_tag"], "FCB")
+        interaction.followup.send.assert_awaited()
+
+    async def test_execute_restore_from_discord(self):
+        from unittest.mock import MagicMock
+        from cogs.admin import execute_restore_from_discord
+
+        guild = MagicMock()
+        r_board = MagicMock()
+        r_board.name = "⚽・LAZ - Zarząd"
+        r_board.id = 1111
+
+        r_player = MagicMock()
+        r_player.name = "⚽・LAZ - Zawodnik"
+        r_player.id = 2222
+
+        guild.roles = [r_board, r_player]
+
+        m_board = MagicMock()
+        m_board.id = 3333
+        m_board.display_name = "Prezes Jan"
+        m_board.roles = [r_board]
+
+        m_player = MagicMock()
+        m_player.id = 4444
+        m_player.display_name = "Gracz Piotr"
+        m_player.roles = [r_player]
+
+        guild.members = [m_board, m_player]
+        guild.channels = []
+        guild.text_channels = []
+
+        stats = await execute_restore_from_discord(guild)
+
+        self.assertEqual(len(stats["clubs"]), 1)
+        self.assertEqual(stats["clubs"][0]["tag"], "LAZ")
+        self.assertEqual(len(stats["players"]), 1)
+        self.assertEqual(stats["players"][0]["name"], "Gracz Piotr")
+
+        c = database.get_club("LAZ")
+        self.assertIsNotNone(c)
+        self.assertEqual(c["role_board_id"], 1111)
+        self.assertEqual(c["role_player_id"], 2222)
+
+        p = database.get_player("Gracz Piotr")
+        self.assertIsNotNone(p)
+        self.assertEqual(p["club_tag"], "LAZ")
+        self.assertEqual(p["discord_id"], 4444)
