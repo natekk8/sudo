@@ -41,3 +41,8 @@ baza_ligi.json
 .idea/
 *.swp
 *.swo
+
+# Bot-hosting & runtime cache
+.bh-history/
+.cache/
+.local/

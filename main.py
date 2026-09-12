@@ -254,7 +254,7 @@ async def slash_rynek_plan_open(interaction: discord.Interaction, termin: str):
     )
     await interaction.response.send_message(f"✅ Zaplanowano otwarcie rynku na: `{dt_str}` ({format_expiry_discord(dt_str)}).", ephemeral=True)
 
-bot.tree.add_group(rynek_slash_group)
+bot.tree.add_command(rynek_slash_group)
 
 
 # ─── TRADYCYJNE KOMENDY PREFIXOWE: !RYNEK ───

@@ -171,6 +171,8 @@ def format_expiry_discord(expires_at: str) -> str:
     if not expires_at: return "Brak"
     try:
         dt = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
+        # Zakładamy, że data jest w strefie Europe/Warsaw
+        dt = dt.replace(tzinfo=WARSAW_TZ)
         ts = int(dt.timestamp())
         return f"<t:{ts}:R> (<t:{ts}:D>)"
     except Exception:

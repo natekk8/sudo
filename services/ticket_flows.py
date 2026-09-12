@@ -289,6 +289,9 @@ async def proces_transferu(interaction: discord.Interaction):
                 actual = existing.get("club_tag", "?")
                 await kanal.send(f"❌ Zawodnik należy do `{actual}`, a nie `{sprzed}`!")
                 continue
+            gracz = existing.get("name") or gracz
+            if not player_dc_id and existing.get("discord_id"):
+                player_dc_id = existing.get("discord_id")
             break
 
         while True:
@@ -430,6 +433,9 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
                 actual = existing.get("club_tag", "?")
                 await kanal.send(f"❌ Zawodnik należy do `{actual}`, a nie `{sprzed}`!")
                 continue
+            gracz = existing.get("name") or gracz
+            if not player_dc_id and existing.get("discord_id"):
+                player_dc_id = existing.get("discord_id")
             break
 
         while True:
@@ -527,6 +533,9 @@ async def proces_aneksu(interaction: discord.Interaction):
             if existing.get("club_tag", "").upper() != user_club:
                 await kanal.send(f"❌ Zawodnik należy do `{existing.get('club_tag', '?')}`, nie do Twojego klubu `{user_club}`!")
                 continue
+            gracz = existing.get("name") or gracz
+            if not player_dc_id and existing.get("discord_id"):
+                player_dc_id = existing.get("discord_id")
             break
 
         stary_termin = existing.get("expires_at", "?")
@@ -619,6 +628,9 @@ async def proces_rozwiazania(interaction: discord.Interaction):
             if existing.get("club_tag", "").upper() != user_club:
                 await kanal.send(f"❌ Zawodnik należy do `{existing.get('club_tag', '?')}`, nie do `{user_club}`!")
                 continue
+            gracz = existing.get("name") or gracz
+            if not player_dc_id and existing.get("discord_id"):
+                player_dc_id = existing.get("discord_id")
             break
 
         while True:

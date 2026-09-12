@@ -78,7 +78,7 @@ class KlubSelectPage(ui.Select):
 
         if club.get("founder_txt") or club.get("board_txt"):
             board_info = []
-            if club.get("founder_txt"): board_info.append(f"Założyciel: {club['founder_txt']}")
+            if club.get("founder_txt"): board_info.append(f"Właściciel: {club['founder_txt']}")
             if club.get("board_txt") and club["board_txt"].lower() != "brak":
                 board_info.append(f"Zarząd: {club['board_txt']}")
             if board_info:

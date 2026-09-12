@@ -473,7 +473,7 @@ class ForumApplicationView(ui.View):
             new_expires = app.get("expires_at")
             new_clause = app.get("clause", "Brak")
 
-            database.extend_player_contract(gracz, new_expires, new_clause)
+            database.extend_player_contract(gracz, new_expires, new_clause, discord_id=dc_id)
             database.add_transfer_history(gracz, dc_id, target_club, target_club, "ANEKS", None)
             database.set_application_status(self.app_id, "ACCEPTED")
 
@@ -512,7 +512,7 @@ class ForumApplicationView(ui.View):
                         try: await m.remove_roles(r)
                         except Exception as e: print(f"[Fed] Błąd usunięcia roli: {e}")
 
-            database.terminate_player_contract(gracz)
+            database.terminate_player_contract(gracz, discord_id=dc_id)
             trans_typ = "ROZWIAZANIE_DYSCYPLINARNE" if app_type == "ROZWIAZANIE_DYSCYPLINARNE" else "ROZWIAZANIE_POLUBOWNE"
             database.add_transfer_history(gracz, dc_id, source_club, None, trans_typ, None)
             database.set_application_status(self.app_id, "ACCEPTED")

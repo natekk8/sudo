@@ -534,6 +534,44 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(len(database.get_pending_applications()), 0)
         self.assertTrue(database.is_market_open())
 
+    # ── Test Ochrony przed duplikatem Discord ID ──
+    def test_duplicate_player_discord_id_prevention(self):
+        database.add_club("CLB", "Club Name", 1, 2)
+        # Rejestracja pod imieniem
+        database.add_or_update_player("Jan Kowalski", 12345, "CLB", "CLB", "5000", "TRANSFER", "2027-01-01 00:00:00")
+        self.assertEqual(1, database.get_club_player_count("CLB"))
+
+        # Aktualizacja/transfer pod wzmianką <@12345> tego samego gracza
+        database.add_or_update_player("<@12345>", 12345, "CLB", "CLB", "10000", "TRANSFER", "2027-06-01 00:00:00")
+        # Powinien być dokładnie 1 gracz w klubie (brak duplikatu Jan Kowalski + <@12345>)
+        self.assertEqual(1, database.get_club_player_count("CLB"))
+        p = database.get_player_by_discord_id(12345)
+        self.assertIsNotNone(p)
+        self.assertEqual(p["name"], "<@12345>")
+
+    # ── Test Case-Insensitive Player Lookup ──
+    def test_case_insensitive_player_lookup(self):
+        database.add_club("AAA", "Triple A", 1, 2)
+        database.add_or_update_player("Robert Lewandowski", 9999, "AAA", "AAA", "Brak", "TRANSFER", "2027-01-01 00:00:00")
+        self.assertIsNotNone(database.get_player("robert lewandowski"))
+        self.assertIsNotNone(database.get_player("ROBERT LEWANDOWSKI"))
+        self.assertIsNotNone(database.get_player("Robert Lewandowski"))
+
+    # ── Test Aneks i Rozwiązanie z dopasowaniem Discord ID ──
+    def test_extend_and_terminate_with_discord_id(self):
+        database.add_club("BBB", "Club B", 1, 2)
+        database.add_or_update_player("Piotr Zieliński", 7777, "BBB", "BBB", "5000", "TRANSFER", "2026-10-01 00:00:00")
+
+        # Przedłużenie po Discord ID nawet przy lekko innym zapisie name
+        database.extend_player_contract("Inny Zapis", "2028-01-01 00:00:00", "25000", discord_id=7777)
+        p = database.get_player_by_discord_id(7777)
+        self.assertEqual(p["expires_at"], "2028-01-01 00:00:00")
+        self.assertEqual(p["clause"], "25000")
+
+        # Rozwiązanie po Discord ID
+        database.terminate_player_contract("Inny Zapis", discord_id=7777)
+        self.assertIsNone(database.get_player_by_discord_id(7777))
+
 
 if __name__ == "__main__":
     unittest.main()

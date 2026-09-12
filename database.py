@@ -185,6 +185,9 @@ def _import_legacy_json_if_needed():
             print(f"[DB] Błąd odczytu {LEGACY_JSON_DB}: {e}")
             return
 
+        if not data.get("kluby") and not data.get("zawodnicy"):
+            return
+
         print(f"[DB] Migracja z {LEGACY_JSON_DB}...")
         cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', ?)",
                        (data.get("ticket_counter", 0),))
@@ -327,17 +330,24 @@ def add_or_update_player(name: str, discord_id: int, club_tag: str, parent_club_
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
+
+            # Jeśli przekazano discord_id, upewnij się że nie ma duplikatu pod inną nazwą
+            if discord_id:
+                cursor.execute("SELECT name FROM players WHERE discord_id = ?", (discord_id,))
+                existing_dc = cursor.fetchone()
+                if existing_dc and existing_dc["name"].lower() != name.lower():
+                    cursor.execute("DELETE FROM players WHERE name = ?", (existing_dc["name"],))
+
             # Sprawdź czy zmieniamy datę (reset flag ostrzeżeń)
-            cursor.execute("SELECT expires_at, clause FROM players WHERE name = ?", (name,))
+            cursor.execute("SELECT expires_at, clause FROM players WHERE name = ? COLLATE NOCASE", (name,))
             old = cursor.fetchone()
             warned_7d = warned_3d = warned_1d = 0
             if old and old["expires_at"] == expires_at:
                 # Data się nie zmieniła – zachowaj flagi
-                cursor.execute("SELECT warned_7d, warned_3d, warned_1d FROM players WHERE name = ?", (name,))
+                cursor.execute("SELECT warned_7d, warned_3d, warned_1d FROM players WHERE name = ? COLLATE NOCASE", (name,))
                 flags = cursor.fetchone()
                 if flags:
                     warned_7d, warned_3d, warned_1d = flags["warned_7d"], flags["warned_3d"], flags["warned_1d"]
-
 
             cursor.execute("""
                 INSERT OR REPLACE INTO players
@@ -354,31 +364,41 @@ def add_or_update_player(name: str, discord_id: int, club_tag: str, parent_club_
             ))
             conn.commit()
 
-def extend_player_contract(name: str, expires_at: str, clause: str):
-    """Aktualizacja kontraktu z resetem flag ostrzeżeń (Aneks)."""
+def extend_player_contract(name: str, expires_at: str, clause: str, discord_id: int = None):
+    """Aktualizacja kontraktu z resetem flag ostrzeżeń (Aneks). Obsługuje dopasowanie po name lub discord_id."""
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE players SET expires_at = ?, clause = ?,
-                    warned_7d = 0, warned_3d = 0, warned_1d = 0
-                WHERE name = ?
-            """, (expires_at, clause, name))
+            if discord_id:
+                cursor.execute("""
+                    UPDATE players SET expires_at = ?, clause = ?,
+                        warned_7d = 0, warned_3d = 0, warned_1d = 0
+                    WHERE discord_id = ? OR name = ? COLLATE NOCASE
+                """, (expires_at, clause, discord_id, name))
+            else:
+                cursor.execute("""
+                    UPDATE players SET expires_at = ?, clause = ?,
+                        warned_7d = 0, warned_3d = 0, warned_1d = 0
+                    WHERE name = ? COLLATE NOCASE
+                """, (expires_at, clause, name))
             conn.commit()
 
-def terminate_player_contract(name: str):
+def terminate_player_contract(name: str, discord_id: int = None):
     """Usuwa gracza z bazy – rozwiązanie kontraktu."""
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM players WHERE name = ?", (name,))
+            if discord_id:
+                cursor.execute("DELETE FROM players WHERE discord_id = ? OR name = ? COLLATE NOCASE", (discord_id, name))
+            else:
+                cursor.execute("DELETE FROM players WHERE name = ? COLLATE NOCASE", (name,))
             conn.commit()
 
 def get_player(name: str):
     if not name: return None
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM players WHERE name = ?", (name,))
+        cursor.execute("SELECT * FROM players WHERE name = ? COLLATE NOCASE", (name,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -400,11 +420,14 @@ def is_player_under_contract(player_name: str, player_discord_id: int = None):
         if p: return p
     return None
 
-def delete_player(name: str):
+def delete_player(name: str, discord_id: int = None):
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM players WHERE name = ?", (name,))
+            if discord_id:
+                cursor.execute("DELETE FROM players WHERE discord_id = ? OR name = ? COLLATE NOCASE", (discord_id, name))
+            else:
+                cursor.execute("DELETE FROM players WHERE name = ? COLLATE NOCASE", (name,))
             conn.commit()
 
 def get_all_players() -> list:
@@ -761,5 +784,20 @@ def reset_database_for_new_season():
             cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', 0)")
             cursor.execute("DELETE FROM settings")
             cursor.execute("INSERT INTO settings (key, value) VALUES ('market_status', 'OPEN')")
+            try:
+                cursor.execute("DELETE FROM sqlite_sequence")
+            except Exception:
+                pass
             conn.commit()
+            try:
+                cursor.execute("VACUUM")
+            except Exception:
+                pass
+
+    if os.path.exists(LEGACY_JSON_DB):
+        try:
+            with open(LEGACY_JSON_DB, "w", encoding="utf-8") as f:
+                json.dump({"kluby": {}, "zawodnicy": {}, "ticket_counter": 0}, f, indent=4)
+        except Exception:
+            pass
 
