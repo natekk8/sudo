@@ -285,10 +285,12 @@ class ForumApplicationView(ui.View):
             await interaction.message.edit(embed=embed, view=None)
 
             if kom_channel:
-                await kom_channel.send(
-                    f"📢 **NOWY KLUB!** Zespół **{nazwa}** (`{skrot}`) został zarejestrowany w lidze!",
-                    allowed_mentions=discord.AllowedMentions.none()
+                embed_kom = discord.Embed(
+                    title="📢 Nowy Klub w Lidze",
+                    description=f"Zespół **{nazwa}** (`{skrot}`) został pomyślnie zarejestrowany!",
+                    color=0x2ecc71
                 )
+                await kom_channel.send(embed=embed_kom)
 
         # ─── PODPISANIE ───
         elif app_type == "PODPISANIE":
@@ -616,22 +618,53 @@ class ForumApplicationView(ui.View):
         if not is_federation(interaction.user):
             return await interaction.response.send_message(
                 "❌ Tylko Zarząd Federacji może odrzucić wniosek.", ephemeral=True)
+                
+        # Use modal to ask for reject reason
+        await interaction.response.send_modal(RejectReasonModal(self.app_id, self._archive_thread))
 
-        await interaction.response.defer()
+class RejectReasonModal(discord.ui.Modal, title="Powód Odrzucenia Wniosku"):
+    def __init__(self, app_id, archive_method):
+        super().__init__()
+        self.app_id = app_id
+        self.archive_method = archive_method
+        self.reason = discord.ui.TextInput(
+            label="Podaj powód odrzucenia:",
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=1000
+        )
+        self.add_item(self.reason)
 
+    async def on_submit(self, interaction: discord.Interaction):
         app = database.try_claim_application_for_approval(self.app_id)
         if not app:
-            return await interaction.followup.send("❌ Ten wniosek jest już zamknięty lub przetwarzany.", ephemeral=True)
+            return await interaction.response.send_message("❌ Ten wniosek jest już zamknięty lub przetwarzany.", ephemeral=True)
 
-        database.set_application_status(self.app_id, "REJECTED",
-                                         rejected_by=f"Federacja ({interaction.user.mention})")
+        database.set_application_status(self.app_id, "REJECTED", rejected_by=f"Federacja ({interaction.user.mention})")
+        
         embed = interaction.message.embeds[0]
         embed.color = 0xe74c3c
         embed.title = f"❌ ODRZUCONO: {embed.title or 'Wniosek'}"
         embed.add_field(name="Decyzja Federacji",
                         value=f"Wniosek odrzucony przez {interaction.user.mention}.", inline=False)
+        embed.add_field(name="Powód odrzucenia", value=self.reason.value, inline=False)
+        
         await interaction.message.edit(embed=embed, view=None)
-        await self._archive_thread(interaction.channel)
+        
+        from config import CHANNEL_KOMUNIKATY_ID
+        kom_channel = interaction.guild.get_channel(CHANNEL_KOMUNIKATY_ID)
+        if kom_channel:
+            embed_kom = discord.Embed(
+                title="❌ Wniosek Odrzucony",
+                description=f"Wniosek #{self.app_id} został odrzucony przez Federację.",
+                color=0xe74c3c
+            )
+            embed_kom.add_field(name="Typ wniosku", value=app.get("type", "Nieznany"), inline=True)
+            embed_kom.add_field(name="Powód", value=self.reason.value, inline=False)
+            await kom_channel.send(embed=embed_kom)
+            
+        await interaction.response.send_message("✅ Wniosek odrzucony i powód wysłany.", ephemeral=True)
+        await self.archive_method(interaction.channel)
 
     # ─────────────────────────── POMOCNICZE ───────────────────────────────────
 

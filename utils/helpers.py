@@ -5,29 +5,24 @@ import discord
 from config import ROLE_FEDERACJA_ID
 import database
 
-# ─── Strefa czasowa Polska ───
 try:
     from zoneinfo import ZoneInfo
     WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 except Exception:
-    # Fallback na Windows bez pakietu tzdata
     from datetime import timezone, timedelta
     WARSAW_TZ = timezone(timedelta(hours=1))
 
 def get_now_warsaw() -> datetime:
-    """Zwraca obecny czas w strefie Europe/Warsaw (naive datetime do porównań ze stringami w SQLite)."""
     try:
         return datetime.now(WARSAW_TZ).replace(tzinfo=None)
     except Exception:
         return datetime.now()
 
-# ─── Walidacje ───
 def clean_tag(tag: str) -> str:
     if not tag: return ""
     return tag.strip().upper()
 
 def is_valid_tag(tag: str) -> bool:
-    """Dokładnie 3 litery lub cyfry (np. LAZ, FC1)."""
     return bool(re.match(r'^[A-Z0-9]{3}$', tag.strip().upper() if tag else ""))
 
 def extract_ids(text: str) -> list:
@@ -35,10 +30,8 @@ def extract_ids(text: str) -> list:
     return [int(uid) for uid in re.findall(r'<@!?(\d+)>', text)]
 
 def safe_thread_name(name: str) -> str:
-    """Obcina nazwę wątku do limitu Discord API (100 znaków)."""
     return name[:100]
 
-# ─── Uprawnienia ───
 def is_federation(member: discord.Member) -> bool:
     if not member or not hasattr(member, "roles"): return False
     return any(r.id == ROLE_FEDERACJA_ID for r in member.roles)
@@ -56,9 +49,7 @@ def is_club_board_or_owner(member: discord.Member, club_tag: str) -> bool:
     if member.id == club.get("reprezentant_dc"): return True
     return False
 
-# ─── Członkowie Discorda ───
 async def get_or_fetch_member(guild: discord.Guild, user_id: int):
-    """Pobiera członka z cache, a w razie braku (po restarcie) odpytuje API Discord."""
     if not user_id or not guild: return None
     member = guild.get_member(user_id)
     if member: return member
@@ -67,23 +58,19 @@ async def get_or_fetch_member(guild: discord.Guild, user_id: int):
     except (discord.NotFound, discord.HTTPException):
         return None
 
-# ─── Blokada spamu ticketów ───
 def has_open_ticket(guild: discord.Guild, user_id: int) -> bool:
-    """Sprawdza czy użytkownik ma już otwarty kanał ticketu."""
     if not guild: return False
     for channel in guild.text_channels:
         overwrites = channel.overwrites
         for target, overwrite in overwrites.items():
             if isinstance(target, discord.Member) and target.id == user_id:
                 if overwrite.view_channel and overwrite.send_messages:
-                    # Kanał widoczny dla tego użytkownika – sprawdź czy to ticket (prefix nazwy)
                     prefixes = ("rejestracja-", "kontrakt-", "transfer-", "wypozyczenie-",
                                 "aneks-", "rozwiazanie-", "rebrand-", "zarzadzanie-")
                     if any(channel.name.startswith(p) for p in prefixes):
                         return True
     return False
 
-# ─── Daty i Terminy ───
 def parse_expiry_date(user_input: str) -> str | None:
     if not user_input: return None
     user_input = user_input.strip()
@@ -108,13 +95,6 @@ def parse_expiry_date(user_input: str) -> str | None:
     return None
 
 def parse_schedule_datetime(user_input: str) -> str | None:
-    """
-    Parsuje datę i godzinę harmonogramu rynku.
-    Obsługuje:
-    - Format względny: '2h', '30m', '3d', '7 dni'
-    - Format bezwzględny: 'DD.MM.YYYY HH:MM', 'YYYY-MM-DD HH:MM', 'DD.MM.YYYY' (godz. 23:59:59) itp.
-    Zwraca string 'YYYY-MM-DD HH:MM:SS' w strefie polskiej lub None.
-    """
     if not user_input: return None
     user_input = user_input.strip()
 
@@ -154,7 +134,6 @@ def parse_schedule_datetime(user_input: str) -> str | None:
             pass
     return None
 
-# ─── Kwoty ───
 def parse_amount(text: str) -> int:
     if not text: return 0
     t = re.sub(r'[\s,]', '', str(text).strip())
@@ -166,7 +145,6 @@ def validate_amount_input(text: str) -> bool:
     if t.lower() == 'brak': return True
     return bool(re.match(r'^\d+$', t))
 
-# ─── Formatowanie ───
 def format_expiry_discord(expires_at: str) -> str:
     if not expires_at: return "Brak"
     try:
@@ -178,7 +156,6 @@ def format_expiry_discord(expires_at: str) -> str:
         return expires_at
 
 def format_schedule_discord(dt_str: str) -> str:
-    """Formatuje datę i godzinę harmonogramu rynku: pełna data z godziną oraz relatywne odliczanie."""
     if not dt_str: return "Brak"
     try:
         dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
@@ -191,12 +168,10 @@ def format_schedule_discord(dt_str: str) -> str:
 def build_squad_bar(count: int, max_count: int) -> str:
     filled = "■" * count
     empty = "□" * (max_count - count)
-    label = "Kadra pełna ⛔" if count >= max_count else f"{max_count - count} wolne miejsce{'a' if max_count - count > 1 else ''}"
+    label = "Kadra pełna ⛔" if count >= max_count else f"{max_count - count} wolne miejsc{'a' if max_count - count > 1 else 'e'}"
     return f"`[{filled}{empty}] {count}/{max_count}` · {label}"
 
-# ─── Discord Helpers ───
 async def get_komunikaty_channel(client: discord.Client, guild: discord.Guild = None) -> discord.TextChannel | None:
-    """Niezawodne pobranie kanału oficjalnych komunikatów ligowych (z obsługą API fetch)."""
     if not client: return None
     from config import CHANNEL_KOMUNIKATY_ID
     channel = client.get_channel(CHANNEL_KOMUNIKATY_ID)
@@ -232,3 +207,42 @@ async def send_dm(client: discord.Client, user_id: int, content: str):
         if user: await user.send(content)
     except (discord.Forbidden, discord.NotFound, discord.HTTPException):
         pass
+
+def build_market_status_embed() -> discord.Embed:
+    state = database.get_market_state()
+    status = state.get("status", "OPEN").upper()
+    is_open = status != "CLOSED"
+    open_at = state.get("open_at")
+    close_at = state.get("close_at")
+
+    color = 0x2ecc71 if is_open else 0xe74c3c
+    title = "🟢 Rynek Transferowy: OTWARTY" if is_open else "🔴 Rynek Transferowy: ZAMKNIĘTY"
+
+    status_line = "**Aktualny stan rynku:** 🟢 **OTWARTY**" if is_open else "**Aktualny stan rynku:** 🔴 **ZAMKNIĘTY**"
+    details = (
+        "Wnioski o podpisanie wolnych agentów, transfery oraz wypożyczenia są obecnie **odblokowane**."
+        if is_open else
+        "Wnioski o podpisanie wolnych agentów, transfery oraz wypożyczenia są obecnie **zablokowane**."
+    )
+
+    embed = discord.Embed(title=title, description=f"{status_line}\n> {details}", color=color)
+
+    if close_at:
+        embed.add_field(name="⏰ Zaplanowane zamknięcie", value=format_schedule_discord(close_at), inline=False)
+    if open_at:
+        embed.add_field(name="🔓 Zaplanowane otwarcie", value=format_schedule_discord(open_at), inline=False)
+
+    if not close_at and not open_at:
+        embed.add_field(name="📅 Harmonogram", value="*Brak zaplanowanych automatycznych zmian statusu.*", inline=False)
+
+    embed.set_footer(text="Liga Federacji • Okienko Transferowe")
+    return embed
+
+
+async def announce_market_change(client: discord.Client, message: str, guild: discord.Guild = None):
+    channel = await get_komunikaty_channel(client, guild)
+    if channel:
+        try:
+            await channel.send(message, allowed_mentions=discord.AllowedMentions.none())
+        except Exception as e:
+            print(f"[announce_market_change] Błąd wysyłania komunikatu: {e}")

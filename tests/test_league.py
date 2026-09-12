@@ -196,8 +196,9 @@ class TestDatabase(unittest.TestCase):
         fd, self.test_db = tempfile.mkstemp(suffix=".db", prefix="test_liga_")
         os.close(fd)
         os.remove(self.test_db)
-        database.DB_PATH = self.test_db
+        import config; config.DB_PATH = self.test_db
         database.init_db()
+        database.reset_database_for_new_season()
 
     def tearDown(self):
         if os.path.exists(self.test_db):
@@ -597,3 +598,81 @@ class TestDatabase(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+    def test_reset_sequence_after_multiple_seasons(self):
+        import database
+        database.reset_database_for_new_season()
+        database.reset_database_for_new_season()
+        self.assertEqual(database.get_next_ticket_id(), "001")
+
+    def test_application_try_claim_prevents_double_processing(self):
+        import database
+        app_id = database.create_application("PODPISANIE", 123)
+        claimed1 = database.try_claim_application_for_approval(app_id)
+        self.assertIsNotNone(claimed1)
+        claimed2 = database.try_claim_application_for_approval(app_id)
+        self.assertIsNone(claimed2)
+
+    def test_revert_application_status_after_error(self):
+        import database
+        app_id = database.create_application("PODPISANIE", 123)
+        database.try_claim_application_for_approval(app_id)
+        database.revert_application_status(app_id)
+        self.assertEqual(database.get_application(app_id)["status"], "PENDING")
+
+    def test_get_stale_applications(self):
+        import database
+        database.create_application("PODPISANIE", 123)
+        stale = database.get_stale_pending_applications(0)
+        self.assertGreaterEqual(len(stale), 1)
+
+    def test_is_market_open_default(self):
+        import database
+        database.delete_setting("market_status")
+        self.assertTrue(database.is_market_open())
+
+    def test_cleanup_expired_free_agents(self):
+        import database
+        database.register_free_agent(123, "FA 1")
+        expired = database.cleanup_expired_free_agents(0)
+        self.assertGreaterEqual(len(expired), 1)
+        self.assertFalse(database.is_free_agent(123))
+
+    def test_reset_sequence_after_multiple_seasons(self):
+        import database
+        database.reset_database_for_new_season()
+        database.reset_database_for_new_season()
+        self.assertEqual(database.get_next_ticket_id(), "001")
+
+    def test_application_try_claim_prevents_double_processing(self):
+        import database
+        app_id = database.create_application("PODPISANIE", 123)
+        claimed1 = database.try_claim_application_for_approval(app_id)
+        self.assertIsNotNone(claimed1)
+        claimed2 = database.try_claim_application_for_approval(app_id)
+        self.assertIsNone(claimed2)
+
+    def test_revert_application_status_after_error(self):
+        import database
+        app_id = database.create_application("PODPISANIE", 123)
+        database.try_claim_application_for_approval(app_id)
+        database.revert_application_status(app_id)
+        self.assertEqual(database.get_application(app_id)["status"], "PENDING")
+
+    def test_get_stale_applications(self):
+        import database
+        database.create_application("PODPISANIE", 123)
+        stale = database.get_stale_pending_applications(0)
+        self.assertGreaterEqual(len(stale), 1)
+
+    def test_is_market_open_default(self):
+        import database
+        database.delete_setting("market_status")
+        self.assertTrue(database.is_market_open())
+
+    def test_cleanup_expired_free_agents(self):
+        import database
+        database.register_free_agent(123, "FA 1")
+        expired = database.cleanup_expired_free_agents(0)
+        self.assertGreaterEqual(len(expired), 1)
+        self.assertFalse(database.is_free_agent(123))

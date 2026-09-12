@@ -27,7 +27,7 @@ async def _create_ticket_channel(guild: discord.Guild, user: discord.Member, pre
 
 
 async def _zadaj_pytanie(kanal, uzytkownik, pytanie, client) -> str:
-    await kanal.send(f"🤖 **[Pytanie]** {pytanie}")
+    await kanal.send(embed=discord.Embed(description=f"❓ {pytanie}", color=0x3498db))
 
     def check(m):
         return m.author == uzytkownik and m.channel == kanal
@@ -36,7 +36,7 @@ async def _zadaj_pytanie(kanal, uzytkownik, pytanie, client) -> str:
         msg = await client.wait_for('message', check=check, timeout=900.0)
         return msg.content.strip()
     except asyncio.TimeoutError:
-        await kanal.send("⏳ **Minęło 15 minut braku aktywności.** Wniosek anulowany.")
+        await kanal.send(embed=discord.Embed(title="⏳ Upłynął czas", description=f" **Minęło 15 minut braku aktywności.** Wniosek anulowany.", color=0xf39c12))
         await asyncio.sleep(3)
         try:
             await kanal.delete()
@@ -54,7 +54,7 @@ async def _send_forum_application(guild, kanal, embed, thread_name, app_id,
     database.set_application_message(app_id, thread.thread.id, thread.message.id)
     if ping_target or ping_source:
         await ping_representatives(thread.thread, ping_target, ping_source)
-    await kanal.send("✅ Wniosek wysłany na forum! Zamykam kanał...")
+    await kanal.send(embed=discord.Embed(description=f"✅ Wniosek wysłany na forum! Zamykam kanał...", color=0x2ecc71))
     await asyncio.sleep(2)
     try:
         await kanal.delete()
@@ -81,16 +81,18 @@ async def proces_rejestracji_klubu(interaction: discord.Interaction):
     kanal = await _create_ticket_channel(guild, user, "rejestracja")
     try:
         await interaction.followup.send(f"Kanał: {kanal.mention}", ephemeral=True)
-        await kanal.send(f"Witaj {user.mention}! Rejestracja klubu – masz 15 min na każdą odpowiedź.")
+        embed_start = discord.Embed(title="🏛️ Rejestracja Nowego Klubu", description=f"Witaj {user.mention}! Bot poprowadzi Cię przez proces.\n> Masz **15 minut** na każdą odpowiedź.", color=0x2b2d31)
+        embed_start.set_footer(text="Liga Federacji • Biuro")
+        await kanal.send(embed=embed_start)
 
         nazwa = await _zadaj_pytanie(kanal, user, "Podaj pełną nazwę drużyny (np. FC Łazy):", client)
 
         while True:
             skrot = clean_tag(await _zadaj_pytanie(kanal, user, "Podaj skrót (dokładnie **3 litery/cyfry**, np. LAZ):", client))
             if not is_valid_tag(skrot):
-                await kanal.send("❌ Skrót musi składać się dokładnie z 3 liter lub cyfr (A-Z, 0-9)!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Skrót musi składać się dokładnie z 3 liter lub cyfr (A-Z, 0-9)!", color=0xe74c3c))
             elif database.get_club(skrot):
-                await kanal.send(f"❌ Skrót `{skrot}` jest już zajęty!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Skrót `{skrot}` jest już zajęty!", color=0xe74c3c))
             else:
                 break
 
@@ -107,7 +109,7 @@ async def proces_rejestracji_klubu(interaction: discord.Interaction):
         await kanal.send(embed=embed, view=v)
         await v.wait()
         if not v.value:
-            await kanal.send("❌ Wniosek anulowany.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Wniosek anulowany.", color=0xe74c3c))
             await asyncio.sleep(2)
             await kanal.delete()
             return
@@ -123,7 +125,7 @@ async def proces_rejestracji_klubu(interaction: discord.Interaction):
     except Exception as e:
         print(f"[proces_rejestracji_klubu] Błąd: {e}\n{traceback.format_exc()}")
         try:
-            await kanal.send(f"❌ Błąd: `{e}`")
+            await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c))
             await asyncio.sleep(5)
             await kanal.delete()
         except Exception:
@@ -152,11 +154,11 @@ async def proces_podpisania(interaction: discord.Interaction):
         while True:
             kup = clean_tag(await _zadaj_pytanie(kanal, user, "Podaj skrót TWOJEGO KLUBU (kupującego):", client))
             if not database.get_club(kup):
-                await kanal.send("❌ Klub nie istnieje!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Klub nie istnieje!", color=0xe74c3c))
             elif not is_club_board_or_owner(user, kup):
-                await kanal.send("❌ Nie jesteś w zarządzie tego klubu!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Nie jesteś w zarządzie tego klubu!", color=0xe74c3c))
             elif database.get_club_player_count(kup) >= MAX_PLAYERS_PER_CLUB:
-                await kanal.send(f"❌ Klub pełny ({MAX_PLAYERS_PER_CLUB}/{MAX_PLAYERS_PER_CLUB}). Podpisanie niemożliwe.")
+                await kanal.send(embed=discord.Embed(description=f"❌ Klub pełny ({MAX_PLAYERS_PER_CLUB}/{MAX_PLAYERS_PER_CLUB}). Podpisanie niemożliwe.", color=0xe74c3c))
                 await asyncio.sleep(5)
                 await kanal.delete()
                 return
@@ -182,12 +184,12 @@ async def proces_podpisania(interaction: discord.Interaction):
             czas = await _zadaj_pytanie(kanal, user, "Długość kontraktu (np. `30`, `30 dni`, `30.06.2027`):", client)
             wazny_do = parse_expiry_date(czas)
             if wazny_do: break
-            await kanal.send("❌ Błędny format. Wpisz liczbę dni (np. `14`) lub datę `DD.MM.RRRR`.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Błędny format. Wpisz liczbę dni (np. `14`) lub datę `DD.MM.RRRR`.", color=0xe74c3c))
 
         while True:
             klauz = await _zadaj_pytanie(kanal, user, "Kwota Klauzuli (np. `5000`) lub `Brak`:", client)
             if validate_amount_input(klauz): break
-            await kanal.send("❌ Podaj prawidłową kwotę (np. `5000`) lub `Brak`.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Podaj prawidłową kwotę (np. `5000`) lub `Brak`.", color=0xe74c3c))
 
         c_target = database.get_club(kup)
         has_target_dc = bool(c_target and (c_target.get("board_ids") or c_target.get("reprezentant_dc")))
@@ -208,7 +210,7 @@ async def proces_podpisania(interaction: discord.Interaction):
         await kanal.send(embed=embed, view=v)
         await v.wait()
         if not v.value:
-            await kanal.send("❌ Wniosek anulowany.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Wniosek anulowany.", color=0xe74c3c))
             await asyncio.sleep(2)
             await kanal.delete()
             return
@@ -228,7 +230,7 @@ async def proces_podpisania(interaction: discord.Interaction):
         pass
     except Exception as e:
         print(f"[proces_podpisania] Błąd: {e}\n{traceback.format_exc()}")
-        try: await kanal.send(f"❌ Błąd: `{e}`"); await asyncio.sleep(5); await kanal.delete()
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await kanal.delete()
         except Exception: pass
 
 
@@ -254,11 +256,11 @@ async def proces_transferu(interaction: discord.Interaction):
         while True:
             kup = clean_tag(await _zadaj_pytanie(kanal, user, "Skrót TWOJEGO KLUBU (Kupujący):", client))
             if not database.get_club(kup):
-                await kanal.send("❌ Klub nie istnieje!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Klub nie istnieje!", color=0xe74c3c))
             elif not is_club_board_or_owner(user, kup):
-                await kanal.send("❌ Odmowa – nie jesteś w zarządzie tego klubu!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Odmowa – nie jesteś w zarządzie tego klubu!", color=0xe74c3c))
             elif database.get_club_player_count(kup) >= MAX_PLAYERS_PER_CLUB:
-                await kanal.send(f"❌ Klub pełny ({MAX_PLAYERS_PER_CLUB}/{MAX_PLAYERS_PER_CLUB}).")
+                await kanal.send(embed=discord.Embed(description=f"❌ Klub pełny ({MAX_PLAYERS_PER_CLUB}/{MAX_PLAYERS_PER_CLUB}).", color=0xe74c3c))
                 await asyncio.sleep(5); await kanal.delete(); return
             else:
                 break
@@ -266,9 +268,9 @@ async def proces_transferu(interaction: discord.Interaction):
         while True:
             sprzed = clean_tag(await _zadaj_pytanie(kanal, user, "Skrót KLUBU SPRZEDAJĄCEGO:", client))
             if not database.get_club(sprzed):
-                await kanal.send("❌ Ten klub nie istnieje!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Ten klub nie istnieje!", color=0xe74c3c))
             elif sprzed == kup:
-                await kanal.send("❌ Kupujący i sprzedający nie mogą być identyczni!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Kupujący i sprzedający nie mogą być identyczni!", color=0xe74c3c))
             else:
                 break
 
@@ -287,7 +289,7 @@ async def proces_transferu(interaction: discord.Interaction):
                 continue
             if existing.get("club_tag", "").upper() != sprzed:
                 actual = existing.get("club_tag", "?")
-                await kanal.send(f"❌ Zawodnik należy do `{actual}`, a nie `{sprzed}`!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Zawodnik należy do `{actual}`, a nie `{sprzed}`!", color=0xe74c3c))
                 continue
             gracz = existing.get("name") or gracz
             if not player_dc_id and existing.get("discord_id"):
@@ -297,18 +299,18 @@ async def proces_transferu(interaction: discord.Interaction):
         while True:
             kwota = await _zadaj_pytanie(kanal, user, "Kwota transferu (np. `10000`):", client)
             if validate_amount_input(kwota): break
-            await kanal.send("❌ Podaj prawidłową kwotę.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Podaj prawidłową kwotę.", color=0xe74c3c))
 
         while True:
             czas = await _zadaj_pytanie(kanal, user, "Długość nowego kontraktu (np. `60 dni` lub `31.12.2026`):", client)
             wazny_do = parse_expiry_date(czas)
             if wazny_do: break
-            await kanal.send("❌ Błędny format daty.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Błędny format daty.", color=0xe74c3c))
 
         while True:
             klauz = await _zadaj_pytanie(kanal, user, "Nowa Klauzula (np. `15000`) lub `Brak`:", client)
             if validate_amount_input(klauz): break
-            await kanal.send("❌ Podaj prawidłową kwotę lub `Brak`.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Podaj prawidłową kwotę lub `Brak`.", color=0xe74c3c))
 
         # Wykup klauzulowy?
         is_buyout = False
@@ -350,7 +352,7 @@ async def proces_transferu(interaction: discord.Interaction):
         await kanal.send(embed=embed, view=v)
         await v.wait()
         if not v.value:
-            await kanal.send("❌ Wniosek anulowany.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Wniosek anulowany.", color=0xe74c3c))
             await asyncio.sleep(2); await kanal.delete(); return
 
         app_id = database.create_application(
@@ -372,7 +374,7 @@ async def proces_transferu(interaction: discord.Interaction):
         pass
     except Exception as e:
         print(f"[proces_transferu] Błąd: {e}\n{traceback.format_exc()}")
-        try: await kanal.send(f"❌ Błąd: `{e}`"); await asyncio.sleep(5); await kanal.delete()
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await kanal.delete()
         except Exception: pass
 
 
@@ -398,11 +400,11 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
         while True:
             kup = clean_tag(await _zadaj_pytanie(kanal, user, "Skrót KLUBU PRZYJMUJĄCEGO (Twojego):", client))
             if not database.get_club(kup):
-                await kanal.send("❌ Klub nie istnieje!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Klub nie istnieje!", color=0xe74c3c))
             elif not is_club_board_or_owner(user, kup):
-                await kanal.send("❌ Odmowa – nie jesteś w zarządzie tego klubu!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Odmowa – nie jesteś w zarządzie tego klubu!", color=0xe74c3c))
             elif database.get_club_player_count(kup) >= MAX_PLAYERS_PER_CLUB:
-                await kanal.send(f"❌ Klub pełny ({MAX_PLAYERS_PER_CLUB}/{MAX_PLAYERS_PER_CLUB}).")
+                await kanal.send(embed=discord.Embed(description=f"❌ Klub pełny ({MAX_PLAYERS_PER_CLUB}/{MAX_PLAYERS_PER_CLUB}).", color=0xe74c3c))
                 await asyncio.sleep(5); await kanal.delete(); return
             else:
                 break
@@ -410,9 +412,9 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
         while True:
             sprzed = clean_tag(await _zadaj_pytanie(kanal, user, "Skrót KLUBU ODDAJĄCEGO:", client))
             if not database.get_club(sprzed):
-                await kanal.send("❌ Ten klub nie istnieje!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Ten klub nie istnieje!", color=0xe74c3c))
             elif sprzed == kup:
-                await kanal.send("❌ Przyjmujący i oddający nie mogą być identyczni!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Przyjmujący i oddający nie mogą być identyczni!", color=0xe74c3c))
             else:
                 break
 
@@ -431,7 +433,7 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
                 continue
             if existing.get("club_tag", "").upper() != sprzed:
                 actual = existing.get("club_tag", "?")
-                await kanal.send(f"❌ Zawodnik należy do `{actual}`, a nie `{sprzed}`!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Zawodnik należy do `{actual}`, a nie `{sprzed}`!", color=0xe74c3c))
                 continue
             gracz = existing.get("name") or gracz
             if not player_dc_id and existing.get("discord_id"):
@@ -442,12 +444,12 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
             czas = await _zadaj_pytanie(kanal, user, "Okres wypożyczenia (np. `30 dni` lub `15.01.2027`):", client)
             wazny_do = parse_expiry_date(czas)
             if wazny_do: break
-            await kanal.send("❌ Błędny format daty.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Błędny format daty.", color=0xe74c3c))
 
         while True:
             kwota = await _zadaj_pytanie(kanal, user, "Opłata za wypożyczenie (np. `2000`) lub `Brak`:", client)
             if validate_amount_input(kwota): break
-            await kanal.send("❌ Podaj prawidłową kwotę lub `Brak`.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Podaj prawidłową kwotę lub `Brak`.", color=0xe74c3c))
 
         c_target = database.get_club(kup)
         c_source = database.get_club(sprzed)
@@ -470,7 +472,7 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
         await kanal.send(embed=embed, view=v)
         await v.wait()
         if not v.value:
-            await kanal.send("❌ Wniosek anulowany.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Wniosek anulowany.", color=0xe74c3c))
             await asyncio.sleep(2); await kanal.delete(); return
 
         app_id = database.create_application(
@@ -492,7 +494,7 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
         pass
     except Exception as e:
         print(f"[proces_wypozyczenia] Błąd: {e}\n{traceback.format_exc()}")
-        try: await kanal.send(f"❌ Błąd: `{e}`"); await asyncio.sleep(5); await kanal.delete()
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await kanal.delete()
         except Exception: pass
 
 
@@ -518,7 +520,7 @@ async def proces_aneksu(interaction: discord.Interaction):
                 break
 
         if not user_club:
-            await kanal.send("❌ Nie jesteś w zarządzie żadnego zarejestrowanego klubu.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Nie jesteś w zarządzie żadnego zarejestrowanego klubu.", color=0xe74c3c))
             await asyncio.sleep(5); await kanal.delete(); return
 
         # Zawodnik musi być w tym samym klubie
@@ -528,10 +530,10 @@ async def proces_aneksu(interaction: discord.Interaction):
             player_dc_id = extracted[0] if extracted else None
             existing = database.is_player_under_contract(gracz, player_dc_id)
             if not existing:
-                await kanal.send(f"❌ Zawodnik `{gracz}` nie ma aktywnego kontraktu w bazie!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Zawodnik `{gracz}` nie ma aktywnego kontraktu w bazie!", color=0xe74c3c))
                 continue
             if existing.get("club_tag", "").upper() != user_club:
-                await kanal.send(f"❌ Zawodnik należy do `{existing.get('club_tag', '?')}`, nie do Twojego klubu `{user_club}`!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Zawodnik należy do `{existing.get('club_tag', '?')}`, nie do Twojego klubu `{user_club}`!", color=0xe74c3c))
                 continue
             gracz = existing.get("name") or gracz
             if not player_dc_id and existing.get("discord_id"):
@@ -546,12 +548,12 @@ async def proces_aneksu(interaction: discord.Interaction):
             czas = await _zadaj_pytanie(kanal, user, "Nowy termin kontraktu (np. `90 dni` lub `31.12.2027`):", client)
             wazny_do = parse_expiry_date(czas)
             if wazny_do: break
-            await kanal.send("❌ Błędny format daty.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Błędny format daty.", color=0xe74c3c))
 
         while True:
             klauz = await _zadaj_pytanie(kanal, user, "Nowa Klauzula (np. `10000`) lub `Bez zmian` / `Brak`:", client)
             if validate_amount_input(klauz) or klauz.lower() in ("bez zmian",): break
-            await kanal.send("❌ Podaj kwotę (np. `10000`) lub `Bez zmian`.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Podaj kwotę (np. `10000`) lub `Bez zmian`.", color=0xe74c3c))
 
         final_klauz = stara_klauzula if klauz.lower() == "bez zmian" else klauz
 
@@ -570,7 +572,7 @@ async def proces_aneksu(interaction: discord.Interaction):
         await kanal.send(embed=embed, view=v)
         await v.wait()
         if not v.value:
-            await kanal.send("❌ Wniosek anulowany.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Wniosek anulowany.", color=0xe74c3c))
             await asyncio.sleep(2); await kanal.delete(); return
 
         app_id = database.create_application(
@@ -589,7 +591,7 @@ async def proces_aneksu(interaction: discord.Interaction):
         pass
     except Exception as e:
         print(f"[proces_aneksu] Błąd: {e}\n{traceback.format_exc()}")
-        try: await kanal.send(f"❌ Błąd: `{e}`"); await asyncio.sleep(5); await kanal.delete()
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await kanal.delete()
         except Exception: pass
 
 
@@ -614,7 +616,7 @@ async def proces_rozwiazania(interaction: discord.Interaction):
                 user_club = c["tag"]
                 break
         if not user_club:
-            await kanal.send("❌ Nie jesteś w zarządzie żadnego zarejestrowanego klubu.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Nie jesteś w zarządzie żadnego zarejestrowanego klubu.", color=0xe74c3c))
             await asyncio.sleep(5); await kanal.delete(); return
 
         while True:
@@ -623,10 +625,10 @@ async def proces_rozwiazania(interaction: discord.Interaction):
             player_dc_id = extracted[0] if extracted else None
             existing = database.is_player_under_contract(gracz, player_dc_id)
             if not existing:
-                await kanal.send(f"❌ Zawodnik `{gracz}` nie istnieje w bazie!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Zawodnik `{gracz}` nie istnieje w bazie!", color=0xe74c3c))
                 continue
             if existing.get("club_tag", "").upper() != user_club:
-                await kanal.send(f"❌ Zawodnik należy do `{existing.get('club_tag', '?')}`, nie do `{user_club}`!")
+                await kanal.send(embed=discord.Embed(description=f"❌ Zawodnik należy do `{existing.get('club_tag', '?')}`, nie do `{user_club}`!", color=0xe74c3c))
                 continue
             gracz = existing.get("name") or gracz
             if not player_dc_id and existing.get("discord_id"):
@@ -640,7 +642,7 @@ async def proces_rozwiazania(interaction: discord.Interaction):
                 client
             )
             if tryb in ("1", "2"): break
-            await kanal.send("❌ Wpisz `1` lub `2`.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Wpisz `1` lub `2`.", color=0xe74c3c))
 
         uzasadnienie = await _zadaj_pytanie(kanal, user, "Podaj krótkie uzasadnienie rozwiązania:", client)
 
@@ -663,7 +665,7 @@ async def proces_rozwiazania(interaction: discord.Interaction):
         await kanal.send(embed=embed, view=v)
         await v.wait()
         if not v.value:
-            await kanal.send("❌ Wniosek anulowany.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Wniosek anulowany.", color=0xe74c3c))
             await asyncio.sleep(2); await kanal.delete(); return
 
         app_id = database.create_application(
@@ -683,7 +685,7 @@ async def proces_rozwiazania(interaction: discord.Interaction):
         pass
     except Exception as e:
         print(f"[proces_rozwiazania] Błąd: {e}\n{traceback.format_exc()}")
-        try: await kanal.send(f"❌ Błąd: `{e}`"); await asyncio.sleep(5); await kanal.delete()
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await kanal.delete()
         except Exception: pass
 
 
@@ -698,10 +700,9 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
     kanal = await _create_ticket_channel(guild, user, "zarzadzanie")
     try:
         await interaction.followup.send(f"Kanał: {kanal.mention}", ephemeral=True)
-        await kanal.send(
-            f"⚙️ Witaj {user.mention}! **Zarządzanie Klubem** (Nazwa, TAG, Właściciel, Zarząd).\n"
-            "*Masz 15 min na każdą odpowiedź. Wpisz `Bez zmian`, aby pozostawić dotychczasową wartość.*"
-        )
+        embed_start = discord.Embed(title="⚙️ Zarządzanie Klubem", description=f"Witaj {user.mention}! Bot poprowadzi Cię przez proces.\n> Masz **15 minut** na każdą odpowiedź.", color=0x2b2d31)
+        embed_start.set_footer(text="Liga Federacji • Biuro")
+        await kanal.send(embed=embed_start)
 
         # Weryfikacja: wnioskodawca musi być w zarządzie lub właścicielem
         all_clubs = database.get_all_clubs()
@@ -711,7 +712,7 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
                 user_club = c["tag"]
                 break
         if not user_club:
-            await kanal.send("❌ Nie jesteś w zarządzie ani właścicielem żadnego zarejestrowanego klubu.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Nie jesteś w zarządzie ani właścicielem żadnego zarejestrowanego klubu.", color=0xe74c3c))
             await asyncio.sleep(5); await kanal.delete(); return
 
         stary_klub = database.get_club(user_club)
@@ -739,10 +740,10 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
                 break
             nowy_tag = clean_tag(nowy_tag_input)
             if not is_valid_tag(nowy_tag):
-                await kanal.send("❌ TAG musi składać się dokładnie z 3 liter lub cyfr (np. FCZ, LG2)!")
+                await kanal.send(embed=discord.Embed(description=f"❌ TAG musi składać się dokładnie z 3 liter lub cyfr (np. FCZ, LG2)!", color=0xe74c3c))
                 continue
             if nowy_tag != user_club and database.get_club(nowy_tag):
-                await kanal.send(f"❌ TAG `{nowy_tag}` jest już zajęty przez inny klub!")
+                await kanal.send(embed=discord.Embed(description=f"❌ TAG `{nowy_tag}` jest już zajęty przez inny klub!", color=0xe74c3c))
                 continue
             break
 
@@ -757,7 +758,7 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
         # Weryfikacja: czy cokolwiek się zmieniło?
         if (nowy_tag == user_club and nowa_nazwa == stara_nazwa and
             nowy_wlasciciel == stary_wlasciciel and nowy_zarzad == stary_zarzad):
-            await kanal.send("❌ Nie wprowadzono żadnych zmian w danych klubu. Anulowanie.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Nie wprowadzono żadnych zmian w danych klubu. Anulowanie.", color=0xe74c3c))
             await asyncio.sleep(3); await kanal.delete(); return
 
         # 5. Powód
@@ -775,7 +776,7 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
         await kanal.send(embed=embed, view=v)
         await v.wait()
         if not v.value:
-            await kanal.send("❌ Wniosek anulowany.")
+            await kanal.send(embed=discord.Embed(description=f"❌ Wniosek anulowany.", color=0xe74c3c))
             await asyncio.sleep(2); await kanal.delete(); return
 
         app_id = database.create_application(
@@ -793,7 +794,7 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
         pass
     except Exception as e:
         print(f"[proces_zarzadzania_klubem] Błąd: {e}\n{traceback.format_exc()}")
-        try: await kanal.send(f"❌ Błąd: `{e}`"); await asyncio.sleep(5); await kanal.delete()
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await kanal.delete()
         except Exception: pass
 
 proces_rebrandingu = proces_zarzadzania_klubem
