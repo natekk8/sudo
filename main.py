@@ -1,5 +1,7 @@
 import os
 import json
+import re
+import asyncio
 import discord
 from discord.ext import commands
 from discord import ui
@@ -11,22 +13,32 @@ load_dotenv()
 # KONFIGURACJA ID
 # ==========================================
 ROLE_FEDERACJA_ID = 1545869517459161092   
-ROLA_WZORZEC_ID = 1545869511318708244  # Rola do klonowania
+ROLA_WZORZEC_ID = 1545869511318708244  
 
 CHANNEL_FORUM_ID = 1548260165134852157          
 CHANNEL_KOMUNIKATY_ID = 1548260354264539196     
 
 DB_FILE = "baza_ligi.json"
 
+# ==========================================
+# BAZA DANYCH I FUNKCJE
+# ==========================================
 def load_db():
     if not os.path.exists(DB_FILE):
-        return {"kluby": {}, "zawodnicy": {}}
+        return {"kluby": {}, "zawodnicy": {}, "ticket_counter": 0}
     with open(DB_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
 def save_db(data):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
+
+def get_ticket_id():
+    db = load_db()
+    count = db.setdefault("ticket_counter", 0) + 1
+    db["ticket_counter"] = count
+    save_db(db)
+    return f"{count:03d}"
 
 def is_federation(member):
     return any(r.id == ROLE_FEDERACJA_ID for r in member.roles)
@@ -48,7 +60,7 @@ async def ping_reprezentantow(thread, kup, sprzed=None):
 
     if ids:
         mentions = " ".join([f"<@{uid}>" for uid in ids])
-        await thread.send(f"🔔 **Wymagana uwaga:** {mentions}\n> Zarządzie, jeśli gracz posiada Discord, oznaczcie go w tym wątku, aby mógł kliknąć przycisk podpisu osobistego.")
+        await thread.send(f"🔔 **Wymagana uwaga:** {mentions}\n> Użyjcie przycisków powyżej, aby wydać oświadczenie.")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -56,128 +68,59 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ==========================================
-# MODALE (FORMULARZE)
+# SYSTEM TICKETÓW (KANAŁY TYMCZASOWE)
 # ==========================================
-class ModalRejestracjaKlubu(ui.Modal, title="📝 Rejestracja Klubu"):
-    nazwa = ui.TextInput(label="Pełna nazwa klubu", max_length=60)
-    skrot = ui.TextInput(label="Skrót (dokładnie 3 litery)", min_length=3, max_length=3)
-    zalozyciel = ui.TextInput(label="Główny Założyciel (Nick z gry / Imię)")
-    zarzad = ui.TextInput(label="Pozostały Zarząd (Opcjonalnie)", style=discord.TextStyle.paragraph, required=False)
+class WniosekConfirmView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.value = None
 
-    async def on_submit(self, interaction: discord.Interaction):
-        forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
-        tag = clean_tag(self.skrot.value)
-        db = load_db()
+    @ui.button(label="Zatwierdź i Wyślij", style=discord.ButtonStyle.green)
+    async def btn_confirm(self, interaction: discord.Interaction, button):
+        self.value = True
+        await interaction.response.defer()
+        self.stop()
 
-        if tag in db["kluby"]:
-            return await interaction.response.send_message(f"❌ Klub `{tag}` już istnieje!", ephemeral=True)
+    @ui.button(label="Anuluj Wniosek", style=discord.ButtonStyle.red)
+    async def btn_cancel(self, interaction: discord.Interaction, button):
+        self.value = False
+        await interaction.response.defer()
+        self.stop()
 
-        embed = discord.Embed(title=f"🏛️ Wniosek o Rejestrację: {self.nazwa.value}", color=0x2b2d31)
-        embed.add_field(name="📌 Skrót", value=f"`{tag}`", inline=True)
-        embed.add_field(name="👑 Założyciel", value=self.zalozyciel.value, inline=True)
-        embed.add_field(name="👥 Zarząd", value=self.zarzad.value or "Brak", inline=False)
-        embed.add_field(name="📡 Reprezentant na Discordzie", value=interaction.user.mention, inline=False)
+async def utworz_kanal_ticket(interaction: discord.Interaction, prefix: str):
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(read_messages=False),
+        interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+    }
+    
+    rola_fed = guild.get_role(ROLE_FEDERACJA_ID)
+    if rola_fed:
+        overwrites[rola_fed] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
-        view = WidokZatwierdzeniaKlubu(nazwa=self.nazwa.value, skrot=tag, zalozyciel_txt=self.zalozyciel.value, rep_id=interaction.user.id)
-        thread = await forum.create_thread(name=f"[{tag}] {self.nazwa.value}", embed=embed, view=view)
-        await interaction.response.send_message(f"✅ Wniosek wysłany: {thread.thread.mention}", ephemeral=True)
+    nazwa_kanalu = f"{prefix}-{get_ticket_id()}"
+    kanal = await guild.create_text_channel(nazwa_kanalu, overwrites=overwrites)
+    await interaction.followup.send(f"Utworzono kanał wniosku: {kanal.mention}", ephemeral=True)
+    return kanal
 
-
-class ModalPodpisGracza(ui.Modal, title="👤 Podpisanie Gracza (Bez Klubu)"):
-    zawodnik = ui.TextInput(label="Zawodnik (Nick z gry / Imię)")
-    klub_kup = ui.TextInput(label="Twój Klub (Skrót)", min_length=3, max_length=3)
-    czas = ui.TextInput(label="Czas trwania kontraktu")
-    klauzula = ui.TextInput(label="Klauzula (Zostaw puste by pominąć)", required=False)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        forum, db, kup = interaction.guild.get_channel(CHANNEL_FORUM_ID), load_db(), clean_tag(self.klub_kup.value)
-        
-        if not has_club_board_role(interaction.user, kup, db):
-            return await interaction.response.send_message(f"❌ Odmowa dostępu: Nie jesteś w Zarządzie `{kup}`!", ephemeral=True)
-
-        klauz_val = self.klauzula.value.strip() if self.klauzula.value else "Brak"
-        embed = discord.Embed(title=f"📄 Podpisanie Gracza: {self.zawodnik.value}", color=0x3498db)
-        embed.add_field(name="Kupujący", value=f"`{kup}`", inline=True)
-        embed.add_field(name="Czas", value=self.czas.value, inline=True)
-        embed.add_field(name="Klauzula", value=f"`{klauz_val}`", inline=True)
-        embed.add_field(name="Status", value="⏳ Oczekuje na podpis (Gracz lub Zarząd).", inline=False)
-
-        view = WidokPodpisu(gracz=self.zawodnik.value, kup=kup, sprzed=None, kwota="0", klauz=klauz_val, wym_sprzed=False, typ="BEZ_KLUBU")
-        thread = await forum.create_thread(name=f"[KONTRAKT] {self.zawodnik.value} ➡️ {kup}", embed=embed, view=view)
-        await ping_reprezentantow(thread.thread, kup)
-        await interaction.response.send_message("✅ Wniosek utworzony.", ephemeral=True)
-
-
-class ModalTransfer(ui.Modal, title="🤝 Wniosek Transferowy"):
-    zawodnik = ui.TextInput(label="Zawodnik (Nick z gry / Imię)")
-    klub_kup = ui.TextInput(label="Twój Klub Kupujący (Skrót)", min_length=3, max_length=3)
-    klub_sprzed = ui.TextInput(label="Klub Sprzedający (Skrót)", min_length=3, max_length=3)
-    kwota = ui.TextInput(label="Kwota Transferu")
-    klauzula = ui.TextInput(label="Nowa Klauzula (Zostaw puste by pominąć)", required=False)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        forum, db, kup, sprzed = interaction.guild.get_channel(CHANNEL_FORUM_ID), load_db(), clean_tag(self.klub_kup.value), clean_tag(self.klub_sprzed.value)
-
-        if not has_club_board_role(interaction.user, kup, db):
-            return await interaction.response.send_message(f"❌ Odmowa dostępu: Nie jesteś w Zarządzie `{kup}`!", ephemeral=True)
-        if sprzed not in db["kluby"]:
-            return await interaction.response.send_message(f"❌ Klub `{sprzed}` nie istnieje!", ephemeral=True)
-
-        # Sprawdzenie klauzuli starego klubu
-        czy_klauzula = False
-        dane_gracza = db["zawodnicy"].get(self.zawodnik.value)
-        if dane_gracza and dane_gracza.get("klauzula") and dane_gracza["klauzula"].lower() != "brak":
-            try:
-                if int("".join(filter(str.isdigit, self.kwota.value))) >= int("".join(filter(str.isdigit, str(dane_gracza["klauzula"])))):
-                    czy_klauzula = True
-            except: pass
-
-        klauz_val = self.klauzula.value.strip() if self.klauzula.value else "Brak"
-        wym_sprzed = not czy_klauzula
-        
-        embed = discord.Embed(title=f"{'🔥 Wykup z Klauzuli' if czy_klauzula else '🤝 Transfer'}: {self.zawodnik.value}", color=0xe67e22 if czy_klauzula else 0x9b59b6)
-        embed.add_field(name="Kupujący", value=f"`{kup}`", inline=True)
-        embed.add_field(name="Sprzedający", value=f"`{sprzed}`", inline=True)
-        embed.add_field(name="Kwota", value=f"`{self.kwota.value}`", inline=True)
-        embed.add_field(name="Nowa Klauzula", value=f"`{klauz_val}`", inline=False)
-        embed.add_field(name="Status", value="⚡ Zgoda starego klubu niewymagana." if czy_klauzula else "⏳ Oczekuje na zgody.", inline=False)
-
-        view = WidokPodpisu(gracz=self.zawodnik.value, kup=kup, sprzed=sprzed, kwota=self.kwota.value, klauz=klauz_val, wym_sprzed=wym_sprzed, typ="TRANSFER")
-        thread = await forum.create_thread(name=f"[{kup}] Transfer: {self.zawodnik.value}", embed=embed, view=view)
-        await ping_reprezentantow(thread.thread, kup, sprzed)
-        await interaction.response.send_message("✅ Wniosek utworzony.", ephemeral=True)
-
-
-class ModalWypozyczenie(ui.Modal, title="⏱️ Wypożyczenie Zawodnika"):
-    zawodnik = ui.TextInput(label="Zawodnik (Nick z gry / Imię)")
-    klub_kup = ui.TextInput(label="Twój Klub Przyjmujący (Skrót)", min_length=3, max_length=3)
-    klub_sprzed = ui.TextInput(label="Klub Oddający (Skrót)", min_length=3, max_length=3)
-    czas = ui.TextInput(label="Czas trwania")
-    kwota = ui.TextInput(label="Opłata za wypożyczenie (0 jeśli brak)")
-
-    async def on_submit(self, interaction: discord.Interaction):
-        forum, db, kup, sprzed = interaction.guild.get_channel(CHANNEL_FORUM_ID), load_db(), clean_tag(self.klub_kup.value), clean_tag(self.klub_sprzed.value)
-
-        if not has_club_board_role(interaction.user, kup, db):
-            return await interaction.response.send_message(f"❌ Odmowa dostępu!", ephemeral=True)
-        if sprzed not in db["kluby"]:
-            return await interaction.response.send_message(f"❌ Klub `{sprzed}` nie istnieje!", ephemeral=True)
-
-        embed = discord.Embed(title=f"⏱️ Wypożyczenie: {self.zawodnik.value}", color=0x1abc9c)
-        embed.add_field(name="Przyjmujący", value=f"`{kup}`", inline=True)
-        embed.add_field(name="Oddający", value=f"`{sprzed}`", inline=True)
-        embed.add_field(name="Opłata", value=f"`{self.kwota.value}`", inline=True)
-        embed.add_field(name="Czas", value=self.czas.value, inline=False)
-        embed.add_field(name="Status", value="⏳ Oczekuje na zgody.", inline=False)
-
-        view = WidokPodpisu(gracz=self.zawodnik.value, kup=kup, sprzed=sprzed, kwota=self.kwota.value, klauz="Bez zmian", wym_sprzed=True, typ="WYPOZYCZENIE")
-        thread = await forum.create_thread(name=f"[{kup}] Wypożyczenie: {self.zawodnik.value}", embed=embed, view=view)
-        await ping_reprezentantow(thread.thread, kup, sprzed)
-        await interaction.response.send_message("✅ Wniosek utworzony.", ephemeral=True)
-
+async def zadaj_pytanie(kanal, uzytkownik, pytanie):
+    await kanal.send(f"🤖 **[Pytanie]** {pytanie}")
+    def check(m):
+        return m.author == uzytkownik and m.channel == kanal
+    try:
+        msg = await bot.wait_for('message', check=check, timeout=300.0)
+        return msg.content
+    except asyncio.TimeoutError:
+        await kanal.send("⏳ Czas minął. Zamykam kanał.")
+        await asyncio.sleep(3)
+        await kanal.delete()
+        raise Exception("Timeout")
 
 # ==========================================
-# WIDOKI I PRZYCISKI
+# WIDOKI I PRZYCISKI DO WĄTKÓW (Z FORUM)
 # ==========================================
 class WidokZatwierdzeniaKlubu(ui.View):
     def __init__(self, nazwa, skrot, zalozyciel_txt, rep_id):
@@ -194,7 +137,6 @@ class WidokZatwierdzeniaKlubu(ui.View):
         r_zarzad = await guild.create_role(name=f"⚽・{self.skrot} - Zarząd", permissions=base_role.permissions, hoist=base_role.hoist)
         r_zawod = await guild.create_role(name=f"⚽・{self.skrot} - Zawodnik", permissions=base_role.permissions, hoist=base_role.hoist)
 
-        # Reprezentant DC automatycznie dostaje rolę zarządu nowego klubu
         member = guild.get_member(self.rep_id)
         if member: await member.add_roles(r_zarzad)
 
@@ -220,7 +162,7 @@ class WidokPodpisu(ui.View):
     def odswiez(self, embed):
         t = f"• Zawodnik: {'✅ Podpisano' if self.p_gracz else '⏳ Oczekuje'}\n"
         if self.wym_sprzed: t += f"• Sprzedający (`{self.sprzed}`): {'✅ Zgoda' if self.p_sprzed else '⏳ Oczekuje'}\n"
-        t += "• Federacja: ⏳ Oczekuje na weryfikację"
+        t += "• Federacja: ⏳ Oczekuje"
         for f in embed.fields:
             if f.name == "Status": f.value = t
         return embed
@@ -228,17 +170,17 @@ class WidokPodpisu(ui.View):
     @ui.button(label="✍️ Podpis Gracza", style=discord.ButtonStyle.primary, custom_id="b_gracz_os")
     async def b_gracz_os(self, interaction: discord.Interaction, button):
         self.p_gracz = True
-        self.gracz_dc_id = interaction.user.id # Zapisuje fizyczne ID osoby klikającej
+        self.gracz_dc_id = interaction.user.id 
         for c in self.children: 
             if c.custom_id in ["b_gracz_os", "b_gracz_tel"]: c.disabled = True
         button.label = "Osobiście"
         await interaction.message.edit(embed=self.odswiez(interaction.message.embeds[0]), view=self)
         await interaction.response.send_message("Złożono podpis osobisty.")
 
-    @ui.button(label="📞 Podpis Zastępczy Zarządu", style=discord.ButtonStyle.secondary, custom_id="b_gracz_tel")
+    @ui.button(label="📞 Podpis Zastępczy (Zarząd)", style=discord.ButtonStyle.secondary, custom_id="b_gracz_tel")
     async def b_gracz_tel(self, interaction: discord.Interaction, button):
         if not has_club_board_role(interaction.user, self.kup, load_db()):
-            return await interaction.response.send_message("❌ Tylko Zarząd kupujący może ręczyć za gracza bez Discorda!", ephemeral=True)
+            return await interaction.response.send_message("❌ Tylko Zarząd kupujący może ręczyć za gracza!", ephemeral=True)
         self.p_gracz = True
         for c in self.children: 
             if c.custom_id in ["b_gracz_os", "b_gracz_tel"]: c.disabled = True
@@ -265,7 +207,6 @@ class WidokPodpisu(ui.View):
         db = load_db()
         guild = interaction.guild
 
-        # Przełączanie ról jeśli gracz podpisał się osobiście i mamy jego konto
         if self.gracz_dc_id:
             member = guild.get_member(self.gracz_dc_id)
             if member:
@@ -286,7 +227,168 @@ class WidokPodpisu(ui.View):
 
         kom = interaction.guild.get_channel(CHANNEL_KOMUNIKATY_ID)
         akcja = "został wypożyczony do" if self.typ == "WYPOZYCZENIE" else "dołącza do"
-        if kom: await kom.send(f"📢 **OFICJALNIE:** {self.gracz} {akcja} **{db['kluby'][self.kup]['nazwa']}**!\n> Kwota: `{self.kwota}` | Klauzula: `{self.klauz}`")
+        if kom: await kom.send(f"📢 **OFICJALNIE:** Zawodnik {self.gracz} {akcja} **{db['kluby'][self.kup]['nazwa']}**!\n> Kwota: `{self.kwota}` | Klauzula: `{self.klauz}`")
+
+# ==========================================
+# PROCESY TICKETÓW (Wywiady z botem)
+# ==========================================
+async def proces_rejestracji_klubu(interaction):
+    kanal = await utworz_kanal_ticket(interaction, "rejestracja")
+    try:
+        await kanal.send(f"Witaj {interaction.user.mention}! Rozpoczynamy rejestrację klubu.")
+        nazwa = await zadaj_pytanie(kanal, interaction.user, "Podaj pełną nazwę drużyny (np. FC Łazy):")
+        
+        while True:
+            skrot = await zadaj_pytanie(kanal, interaction.user, "Podaj skrót drużyny (Dokładnie 3 litery, np. LAZ):")
+            skrot = clean_tag(skrot)
+            db = load_db()
+            if len(skrot) != 3:
+                await kanal.send("❌ Skrót musi mieć dokładnie 3 litery!")
+            elif skrot in db["kluby"]:
+                await kanal.send(f"❌ Skrót `{skrot}` jest już zajęty!")
+            else:
+                break
+
+        zalozyciel = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Głównego Założyciela (lub wpisz Imię jeśli nie ma DC):")
+        zarzad = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Pozostały Zarząd (lub wpisz 'Brak'):")
+
+        embed = discord.Embed(title=f"🏛️ Podsumowanie: {nazwa}", color=0x2b2d31)
+        embed.add_field(name="Skrót", value=skrot, inline=True)
+        embed.add_field(name="Założyciel", value=zalozyciel, inline=True)
+        embed.add_field(name="Zarząd", value=zarzad, inline=False)
+        
+        view = WniosekConfirmView()
+        msg = await kanal.send(embed=embed, view=view)
+        await view.wait()
+        
+        if view.value:
+            forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
+            v_forum = WidokZatwierdzeniaKlubu(nazwa, skrot, zalozyciel, interaction.user.id)
+            thread = await forum.create_thread(name=f"[{skrot}] {nazwa}", embed=embed, view=v_forum)
+            await kanal.send(f"✅ Wysłano! {thread.thread.mention}. Zamykam kanał...")
+        
+        await asyncio.sleep(2)
+        await kanal.delete()
+    except Exception:
+        pass
+
+async def proces_podpisania(interaction):
+    kanal = await utworz_kanal_ticket(interaction, "kontrakt")
+    try:
+        db = load_db()
+        while True:
+            kup = await zadaj_pytanie(kanal, interaction.user, "Podaj skrót TWOJEGO KLUBU (kupującego):")
+            kup = clean_tag(kup)
+            if not has_club_board_role(interaction.user, kup, db):
+                await kanal.send("❌ Nie jesteś w zarządzie tego klubu!")
+            else: break
+            
+        gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika (lub wpisz jego imię):")
+        czas = await zadaj_pytanie(kanal, interaction.user, "Podaj czas trwania kontraktu (np. 1 sezon):")
+        klauz = await zadaj_pytanie(kanal, interaction.user, "Podaj kwotę Klauzuli (lub wpisz 'Brak'):")
+
+        embed = discord.Embed(title=f"📄 Podpisanie Gracza: {gracz}", color=0x3498db)
+        embed.add_field(name="Kupujący", value=f"`{kup}`", inline=True)
+        embed.add_field(name="Czas", value=czas, inline=True)
+        embed.add_field(name="Klauzula", value=klauz, inline=True)
+        embed.add_field(name="Status", value="⏳ Oczekuje na podpisy.", inline=False)
+
+        view = WniosekConfirmView()
+        await kanal.send(embed=embed, view=view)
+        await view.wait()
+        
+        if view.value:
+            forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
+            v_forum = WidokPodpisu(gracz, kup, None, "0", klauz, False, "BEZ_KLUBU")
+            thread = await forum.create_thread(name=f"[{kup}] Nowy Gracz: {gracz}", embed=embed, view=v_forum)
+            await ping_reprezentantow(thread.thread, kup)
+        
+        await kanal.delete()
+    except Exception: pass
+
+async def proces_transferu(interaction):
+    kanal = await utworz_kanal_ticket(interaction, "transfer")
+    try:
+        db = load_db()
+        while True:
+            kup = clean_tag(await zadaj_pytanie(kanal, interaction.user, "Skrót TWOJEGO KLUBU (Kupujący):"))
+            if not has_club_board_role(interaction.user, kup, db): await kanal.send("❌ Odmowa dostępu!")
+            else: break
+            
+        while True:
+            sprzed = clean_tag(await zadaj_pytanie(kanal, interaction.user, "Skrót KLUBU SPRZEDAJĄCEGO:"))
+            if sprzed not in db["kluby"]: await kanal.send("❌ Ten klub nie istnieje w bazie!")
+            else: break
+
+        gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika (lub wpisz Imię):")
+        kwota = await zadaj_pytanie(kanal, interaction.user, "Kwota transferu:")
+        klauz = await zadaj_pytanie(kanal, interaction.user, "Nowa Klauzula (lub wpisz 'Brak'):")
+
+        czy_klauzula = False
+        dane_gracza = db["zawodnicy"].get(gracz)
+        if dane_gracza and dane_gracza.get("klauzula") and dane_gracza["klauzula"].lower() != "brak":
+            try:
+                if int("".join(filter(str.isdigit, kwota))) >= int("".join(filter(str.isdigit, str(dane_gracza["klauzula"])))): czy_klauzula = True
+            except: pass
+
+        wym_sprzed = not czy_klauzula
+        embed = discord.Embed(title=f"{'🔥 Wykup' if czy_klauzula else '🤝 Transfer'}: {gracz}", color=0xe67e22 if czy_klauzula else 0x9b59b6)
+        embed.add_field(name="Kupujący", value=f"`{kup}`", inline=True)
+        embed.add_field(name="Sprzedający", value=f"`{sprzed}`", inline=True)
+        embed.add_field(name="Kwota", value=kwota, inline=True)
+        embed.add_field(name="Nowa Klauzula", value=klauz, inline=False)
+        embed.add_field(name="Status", value="⚡ Zgoda niewymagana." if czy_klauzula else "⏳ Oczekuje na zgody.", inline=False)
+
+        view = WniosekConfirmView()
+        await kanal.send(embed=embed, view=view)
+        await view.wait()
+        
+        if view.value:
+            forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
+            v_forum = WidokPodpisu(gracz, kup, sprzed, kwota, klauz, wym_sprzed, "TRANSFER")
+            thread = await forum.create_thread(name=f"[{kup}] Transfer: {gracz}", embed=embed, view=v_forum)
+            await ping_reprezentantow(thread.thread, kup, sprzed)
+        
+        await kanal.delete()
+    except Exception: pass
+
+async def proces_wypozyczenia(interaction):
+    kanal = await utworz_kanal_ticket(interaction, "wypozyczenie")
+    try:
+        db = load_db()
+        while True:
+            kup = clean_tag(await zadaj_pytanie(kanal, interaction.user, "Skrót KLUBU PRZYJMUJĄCEGO (Twój):"))
+            if not has_club_board_role(interaction.user, kup, db): await kanal.send("❌ Odmowa dostępu!")
+            else: break
+            
+        while True:
+            sprzed = clean_tag(await zadaj_pytanie(kanal, interaction.user, "Skrót KLUBU ODDAJĄCEGO:"))
+            if sprzed not in db["kluby"]: await kanal.send("❌ Ten klub nie istnieje w bazie!")
+            else: break
+
+        gracz = await zadaj_pytanie(kanal, interaction.user, "Oznacz @Zawodnika:")
+        czas = await zadaj_pytanie(kanal, interaction.user, "Czas trwania:")
+        kwota = await zadaj_pytanie(kanal, interaction.user, "Opłata za wypożyczenie (lub 'Brak'):")
+
+        embed = discord.Embed(title=f"⏱️ Wypożyczenie: {gracz}", color=0x1abc9c)
+        embed.add_field(name="Przyjmujący", value=f"`{kup}`", inline=True)
+        embed.add_field(name="Oddający", value=f"`{sprzed}`", inline=True)
+        embed.add_field(name="Opłata", value=kwota, inline=True)
+        embed.add_field(name="Czas", value=czas, inline=False)
+        embed.add_field(name="Status", value="⏳ Oczekuje na zgody.", inline=False)
+
+        view = WniosekConfirmView()
+        await kanal.send(embed=embed, view=view)
+        await view.wait()
+        
+        if view.value:
+            forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
+            v_forum = WidokPodpisu(gracz, kup, sprzed, kwota, "Bez zmian", True, "WYPOZYCZENIE")
+            thread = await forum.create_thread(name=f"[{kup}] Wypożyczenie: {gracz}", embed=embed, view=v_forum)
+            await ping_reprezentantow(thread.thread, kup, sprzed)
+        
+        await kanal.delete()
+    except Exception: pass
 
 # ==========================================
 # GŁÓWNY PANEL STARTOWY
@@ -295,18 +397,30 @@ class WidokPaneluGlownego(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     @ui.button(label="Rejestracja Klubu", style=discord.ButtonStyle.primary, emoji="📝", custom_id="p_klub")
-    async def b_k(self, i, b): await i.response.send_modal(ModalRejestracjaKlubu())
+    async def b_k(self, i, b): bot.loop.create_task(proces_rejestracji_klubu(i))
     @ui.button(label="Podpisanie gracza", style=discord.ButtonStyle.success, emoji="👤", custom_id="p_wolny")
-    async def b_w(self, i, b): await i.response.send_modal(ModalPodpisGracza())
+    async def b_w(self, i, b): bot.loop.create_task(proces_podpisania(i))
     @ui.button(label="Wniosek Transferowy", style=discord.ButtonStyle.secondary, emoji="🤝", custom_id="p_trans")
-    async def b_t(self, i, b): await i.response.send_modal(ModalTransfer())
+    async def b_t(self, i, b): bot.loop.create_task(proces_transferu(i))
     @ui.button(label="Wypożyczenie", style=discord.ButtonStyle.secondary, emoji="⏱️", custom_id="p_wyp")
-    async def b_wyp(self, i, b): await i.response.send_modal(ModalWypozyczenie())
+    async def b_wyp(self, i, b): bot.loop.create_task(proces_wypozyczenia(i))
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup_panel(ctx):
-    embed = discord.Embed(title="🏛️ Panel Federacji", color=0x2b2d31)
+    embed = discord.Embed(title="🏛️ Panel Sterowania Federacji", color=0x2b2d31)
+    embed.description = (
+        "Wybierz akcję z przycisków poniżej. Bot utworzy tymczasowy kanał tekstowy widoczny tylko dla Ciebie, w którym odpowiesz na pytania ankiety, mogąc swobodnie oznaczać (@) użytkowników.\n\n"
+        "**Co robią poszczególne przyciski?**\n"
+        "**📝 Rejestracja Klubu**\n"
+        "Otwiera proces zakładania nowego zespołu. Wymaga podania pełnej nazwy, trzyliterowego skrótu oraz oznaczenia członków zarządu.\n\n"
+        "**👤 Podpisanie gracza (bez klubu)**\n"
+        "Pozwala zarejestrować zawodnika, który obecnie nie znajduje się w żadnej bazie klubowej (tzw. wolny transfer). Możesz opcjonalnie zdefiniować mu klauzulę odejścia.\n\n"
+        "**🤝 Wniosek Transferowy**\n"
+        "Rozpoczyna proces kupna gracza z innej drużyny. Jeśli wpisana kwota jest mniejsza niż klauzula zawodnika, bot zażąda zgody drugiego klubu. Jeśli kwota przekracza klauzulę, transfer traktowany jest jako przymusowy wykup.\n\n"
+        "**⏱️ Wypożyczenie**\n"
+        "Tymczasowe, płatne lub darmowe przejście zawodnika do innej drużyny na ustalony czas bez ingerencji w jego zapisy klauzulowe."
+    )
     await ctx.send(embed=embed, view=WidokPaneluGlownego())
     await ctx.message.delete()
 
