@@ -172,9 +172,9 @@ def init_db():
                 cursor.execute("DELETE FROM transfer_history")
                 cursor.execute("DELETE FROM free_agents")
                 cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', 0)")
-                cursor.execute("DELETE FROM settings")
-                cursor.execute("INSERT INTO settings (key, value) VALUES ('market_status', 'OPEN')")
-                cursor.execute("INSERT INTO settings (key, value) VALUES ('season_initialized', '2026_27')")
+                cursor.execute("DELETE FROM settings WHERE key NOT LIKE 'cfg_%'")
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('market_status', 'OPEN')")
+                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('season_initialized', '2026_27')")
                 try:
                     cursor.execute("DELETE FROM sqlite_sequence")
                 except Exception:
@@ -204,9 +204,9 @@ def reset_database_for_new_season():
             cursor.execute("DELETE FROM free_agents")
             cursor.execute("DELETE FROM clubs")
             cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', 0)")
-            cursor.execute("DELETE FROM settings")
-            cursor.execute("INSERT INTO settings (key, value) VALUES ('market_status', 'OPEN')")
-            cursor.execute("INSERT INTO settings (key, value) VALUES ('season_initialized', '2026_27')")
+            cursor.execute("DELETE FROM settings WHERE key NOT LIKE 'cfg_%'")
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('market_status', 'OPEN')")
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('season_initialized', '2026_27')")
             try:
                 cursor.execute("DELETE FROM sqlite_sequence")
             except Exception:

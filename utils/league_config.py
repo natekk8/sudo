@@ -30,8 +30,8 @@ _DEFAULTS = {
 
 _LABELS = {
     "cfg_max_players":        "Max graczy w klubie",
-    "cfg_channel_forum":      "Kanal forum (ID)",
-    "cfg_channel_komunikaty": "Kanal komunikatow (ID)",
+    "cfg_channel_forum":      "Kanał forum (ID)",
+    "cfg_channel_komunikaty": "Kanał komunikatów (ID)",
     "cfg_role_federacja":     "Rola Federacji (ID)",
     "cfg_rola_wzorzec":       "Wzorzec roli gracza (ID)",
     "cfg_season_label":       "Oznaczenie sezonu",

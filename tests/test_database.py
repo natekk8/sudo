@@ -103,3 +103,42 @@ class TestDatabase(unittest.TestCase):
         self.assertIsNone(database.get_player("Player 1"))
         self.assertTrue(database.is_market_open())
         self.assertEqual(database.get_setting("season_initialized"), "2026_27")
+
+    def test_reset_season_preserves_setup_config(self):
+        # Symulacja ustawień z panelu /setup
+        database.set_setting("cfg_max_players", "5")
+        database.set_setting("cfg_channel_forum", "123456789")
+        database.set_setting("cfg_channel_komunikaty", "987654321")
+        database.set_setting("cfg_role_federacja", "111222333")
+        database.set_setting("cfg_season_label", "2026/27")
+        database.set_setting("cfg_league_name", "Federacja Siatkówki Stołowej (FSS)")
+
+        # Dodaj dane sezonowe
+        database.add_club("FCB", "FC Barcelona", 1, 2)
+        database.add_or_update_player("Player 1", 100, "FCB", None, "Brak", "Professional", "2026-12-31")
+        database.register_free_agent(555, "FreeAgent")
+        database.create_application("PODPISANIE", 100)
+        database.add_transfer_history("Player 1", 100, "FCB", "RMA", "TRANSFER", "5000")
+
+        # Wykonaj reset sezonu
+        database.reset_database_for_new_season()
+
+        # Weryfikacja: ustawienia /setup MUSZĄ pozostać nienaruszone
+        self.assertEqual(database.get_setting("cfg_max_players"), "5")
+        self.assertEqual(database.get_setting("cfg_channel_forum"), "123456789")
+        self.assertEqual(database.get_setting("cfg_channel_komunikaty"), "987654321")
+        self.assertEqual(database.get_setting("cfg_role_federacja"), "111222333")
+        self.assertEqual(database.get_setting("cfg_season_label"), "2026/27")
+        self.assertEqual(database.get_setting("cfg_league_name"), "Federacja Siatkówki Stołowej (FSS)")
+
+        # Weryfikacja: dane ligowe zostały wyczyszczone
+        self.assertIsNone(database.get_club("FCB"))
+        self.assertIsNone(database.get_player("Player 1"))
+        self.assertFalse(database.is_free_agent(555))
+        self.assertEqual(len(database.get_pending_applications()), 0)
+        self.assertEqual(len(database.get_player_transfer_history("Player 1")), 0)
+
+        # Weryfikacja: licznik ticketów zresetowany do 001
+        self.assertEqual(database.get_next_ticket_id(), "001")
+        self.assertTrue(database.is_market_open())
+

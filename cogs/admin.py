@@ -6,6 +6,7 @@ from discord import app_commands
 from discord.ext import commands
 import database
 from utils.helpers import is_federation
+import utils.league_config as league_config
 
 
 def _is_admin(user) -> bool:
@@ -19,18 +20,18 @@ class AdminCog(commands.Cog):
     # ── Prefix: !reset ────────────────────────────────────────────────────────
     @commands.command(name='reset', aliases=['reset_sezon', 'reset_bazy', 'reset_ligi'])
     async def cmd_reset(self, ctx):
-        """Resetuje cala baze danych ligi na nowy sezon."""
+        """Resetuje całą bazę danych ligi na nowy sezon (z zachowaniem konfiguracji /setup)."""
         if not (ctx.author.guild_permissions.administrator or is_federation(ctx.author)):
-            return await ctx.reply("❌ Brak uprawnien. Tylko Zarzad Federacji / Administrator.")
+            return await ctx.reply("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.")
         database.reset_database_for_new_season()
         await ctx.reply(embed=_build_reset_embed())
 
     # ── Prefix: !backup_db ────────────────────────────────────────────────────
     @commands.command(name='backup_db')
     async def cmd_backup_db(self, ctx):
-        """Tworzy kopie zapasowa bazy SQLite i wysyla plik."""
+        """Tworzy kopię zapasową bazy SQLite i wysyła plik."""
         if not (ctx.author.guild_permissions.administrator or is_federation(ctx.author)):
-            return await ctx.reply("❌ Brak uprawnien.")
+            return await ctx.reply("❌ Brak uprawnień.")
         temp_fd, temp_path = tempfile.mkstemp(suffix=".db", prefix="liga_backup_")
         os.close(temp_fd)
         os.remove(temp_path)
@@ -42,7 +43,7 @@ class AdminCog(commands.Cog):
                 file=discord.File(temp_path, filename=f"liga_backup_{ts}.db")
             )
         except Exception as e:
-            await ctx.reply(f"❌ Blad tworzenia kopii: {e}")
+            await ctx.reply(f"❌ Błąd tworzenia kopii: {e}")
         finally:
             if os.path.exists(temp_path):
                 try: os.remove(temp_path)
@@ -53,7 +54,7 @@ class AdminCog(commands.Cog):
     async def cmd_db_stats(self, ctx):
         """Statystyki pliku bazy SQLite."""
         if not (ctx.author.guild_permissions.administrator or is_federation(ctx.author)):
-            return await ctx.reply("❌ Brak uprawnien.")
+            return await ctx.reply("❌ Brak uprawnień.")
         stats = database.get_db_file_stats()
         embed = discord.Embed(title="🗄️ Statystyki bazy SQLite", color=0x2b2d31)
         embed.add_field(name="Rozmiar", value=f"{stats.get('file_size_kb', 0)} KB", inline=True)
@@ -69,18 +70,20 @@ class AdminCog(commands.Cog):
         await ctx.reply(embed=embed)
 
     # ── Slash: /reset ──────────────────────────────────────────────────────────
-    @app_commands.command(name='reset', description='[Admin] Resetuj cala baze danych ligi na nowy sezon')
+    @app_commands.command(name='reset', description='[Admin] Resetuj bazę danych ligi na nowy sezon')
     async def slash_reset(self, interaction: discord.Interaction):
         if not _is_admin(interaction.user):
-            return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
         database.reset_database_for_new_season()
         await interaction.response.send_message(embed=_build_reset_embed())
 
 
 def _build_reset_embed() -> discord.Embed:
+    org_name = league_config.league_name()
+    mx = league_config.max_players()
     embed = discord.Embed(
         title="🏆 Liga Zresetowana",
-        description="> Baza danych wyczyszczona z powodzeniem. Mozna rejestrowac kluby i zawodnikow.",
+        description="> Baza danych wyczyszczona z powodzeniem. Można rejestrować kluby i zawodników.",
         color=0x2ecc71,
         timestamp=datetime.utcnow()
     )
@@ -90,7 +93,12 @@ def _build_reset_embed() -> discord.Embed:
         "> • Licznik ticketów → `#001`\n"
         "> • Rynek transferowy → **OTWARTY**"
     ), inline=False)
-    embed.set_footer(text=f"Federacja Siatkówki Stołowej (FSS) • {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    embed.add_field(name="⚙️ Zachowana konfiguracja (/setup)", value=(
+        f"> • Max graczy w klubie: **{mx}**\n"
+        "> • ID kanałów i ról: **Bez zmian**\n"
+        f"> • Organizacja: **{org_name}**"
+    ), inline=False)
+    embed.set_footer(text=f"{org_name} • {datetime.now().strftime('%d.%m.%Y %H:%M')}")
     return embed
 
 

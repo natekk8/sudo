@@ -8,17 +8,17 @@ Struktura slash commands:
   /setup liga max_graczy <n>       → zmiana limitu graczy
   /setup liga sezon <label>        → zmiana oznaczenia sezonu
   /setup liga nazwa <text>         → zmiana nazwy ligi w footerach
-  /setup kanal forum <id>          → kanal forum wnioskow
-  /setup kanal komunikaty <id>     → kanal oficjalnych komunikatow
-  /setup rola federacja <id>       → rola Zarzadu Federacji
+  /setup kanal forum <id>          → kanał forum wniosków
+  /setup kanal komunikaty <id>     → kanał oficjalnych komunikatów
+  /setup rola federacja <id>       → rola Zarządu Federacji
   /setup rola wzorzec <id>         → wzorzec roli gracza
   /setup rynek otworz              → natychmiastowe otwarcie rynku
-  /setup rynek zamknij             → natychmiastowe zamkniecie rynku
-  /setup rynek zaplanuj_zamkniecie → zaplanuj zamkniecie (np. 20.09.2026 18:00 / 2h / 3d)
+  /setup rynek zamknij             → natychmiastowe zamknięcie rynku
+  /setup rynek zaplanuj_zamkniecie → zaplanuj zamknięcie (np. 20.09.2026 18:00 / 2h / 3d)
   /setup rynek zaplanuj_otwarcie   → zaplanuj otwarcie
   /setup rynek anuluj_harmonogram  → kasuje zaplanowane zmiany
 
-Prefix komendy (pozostawione jako skroty):
+Prefix komendy (pozostawione jako skróty):
   !reset       → reset bazy (w admin.py)
   !rynek       → szybki status rynku (w market.py)
 """
@@ -44,7 +44,7 @@ def _is_admin(user: discord.Member) -> bool:
 
 
 def _build_panel_embed() -> discord.Embed:
-    """Glowny embed panelu /setup ze wszystkimi aktualnymi ustawieniami."""
+    """Główny embed panelu /setup ze wszystkimi aktualnymi ustawieniami."""
     all_cfg = cfg.get_all_config()
     market = database.get_market_state()
     is_open = market.get("status", "OPEN").upper() != "CLOSED"
@@ -58,14 +58,14 @@ def _build_panel_embed() -> discord.Embed:
     )
 
     # ── Sekcja: Liga ──────────────────────────────────────────────────────────
-    embed.add_field(name="🏆  Ogolne", value=(
+    embed.add_field(name="🏆  Ogólne", value=(
         f"> **Organizacja:** `{cfg.get_str('cfg_league_name') or 'Federacja Siatkówki Stołowej (FSS)'}`\n"
         f"> **Sezon:** `{cfg.get_str('cfg_season_label') or '2026/27'}`\n"
         f"> **Max graczy w klubie:** `{cfg.max_players()}`"
     ), inline=True)
 
-    # ── Sekcja: Kanaly ────────────────────────────────────────────────────────
-    embed.add_field(name="📢  Kanaly", value=(
+    # ── Sekcja: Kanały ────────────────────────────────────────────────────────
+    embed.add_field(name="📢  Kanały", value=(
         f"> **Forum:** `{cfg.channel_forum_id() or 'nie ustawiony'}`\n"
         f"> **Komunikaty:** `{cfg.channel_komunikaty_id() or 'nie ustawiony'}`"
     ), inline=True)
@@ -77,10 +77,10 @@ def _build_panel_embed() -> discord.Embed:
     ), inline=True)
 
     # ── Sekcja: Rynek ────────────────────────────────────────────────────────
-    rynek_status = "🟢  **OTWARTY**" if is_open else "🔴  **ZAMKNIETY**"
+    rynek_status = "🟢  **OTWARTY**" if is_open else "🔴  **ZAMKNIĘTY**"
     rynek_lines = [f"> **Status:** {rynek_status}"]
     if close_at:
-        rynek_lines.append(f"> **Zamkniecie:** {format_schedule_discord(close_at)}")
+        rynek_lines.append(f"> **Zamknięcie:** {format_schedule_discord(close_at)}")
     if open_at:
         rynek_lines.append(f"> **Otwarcie:** {format_schedule_discord(open_at)}")
     if not open_at and not close_at:
@@ -91,11 +91,10 @@ def _build_panel_embed() -> discord.Embed:
     return embed
 
 
-
 # ─── Widok interaktywny panelu ────────────────────────────────────────────────
 
 class SetupPanelView(ui.View):
-    """Interaktywne przyciski w glownym panelu /setup."""
+    """Interaktywne przyciski w głównym panelu /setup."""
 
     def __init__(self, guild: discord.Guild):
         super().__init__(timeout=120)
@@ -104,7 +103,7 @@ class SetupPanelView(ui.View):
     async def _refresh(self, interaction: discord.Interaction):
         embed = _build_panel_embed()
         is_open = database.get_market_state().get("status", "OPEN").upper() != "CLOSED"
-        # Aktualizuj etykiety przyciskow
+        # Aktualizuj etykiety przycisków
         for item in self.children:
             if isinstance(item, ui.Button):
                 if item.custom_id == "mkt_toggle_open":
@@ -113,18 +112,18 @@ class SetupPanelView(ui.View):
                     item.disabled = not is_open
         await interaction.response.edit_message(embed=embed, view=self)
 
-    # ── Otworz rynek ────────────────────────────────────────────────────────
-    @ui.button(label="🟢 Otworz Rynek", style=discord.ButtonStyle.success,
+    # ── Otwórz rynek ────────────────────────────────────────────────────────
+    @ui.button(label="🟢 Otwórz Rynek", style=discord.ButtonStyle.success,
                custom_id="mkt_toggle_open", row=0)
     async def btn_open(self, interaction: discord.Interaction, button: ui.Button):
         if not _is_admin(interaction.user):
-            return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
         database.set_market_status("OPEN", scheduled_open="")
         await announce_market_change(
             interaction.client,
-            "🔓 **RYNEK TRANSFEROWY ZOSTAL OTWARTY!**\n"
-            "> Zarzad Federacji otworzyl okienko transferowe!\n"
-            "> Skladanie wnioskow transferowych, kontraktowych i wypozyczen zostalo odblokowane.",
+            "🔓 **RYNEK TRANSFEROWY ZOSTAŁ OTWARTY!**\n"
+            "> Zarząd Federacji otworzył okienko transferowe!\n"
+            "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało odblokowane.",
             guild=self.guild
         )
         await self._refresh(interaction)
@@ -134,13 +133,13 @@ class SetupPanelView(ui.View):
                custom_id="mkt_toggle_close", row=0)
     async def btn_close(self, interaction: discord.Interaction, button: ui.Button):
         if not _is_admin(interaction.user):
-            return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
         database.set_market_status("CLOSED", scheduled_close="")
         await announce_market_change(
             interaction.client,
-            "🔒 **RYNEK TRANSFEROWY ZOSTAL ZAMKNIETY!**\n"
-            "> Zarzad Federacji zamknal okienko transferowe.\n"
-            "> Skladanie wnioskow transferowych, kontraktowych i wypozyczen zostalo zablokowane.",
+            "🔒 **RYNEK TRANSFEROWY ZOSTAŁ ZAMKNIĘTY!**\n"
+            "> Zarząd Federacji zamknął okienko transferowe.\n"
+            "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało zablokowane.",
             guild=self.guild
         )
         await self._refresh(interaction)
@@ -150,13 +149,13 @@ class SetupPanelView(ui.View):
                custom_id="mkt_cancel_schedule", row=0)
     async def btn_cancel_schedule(self, interaction: discord.Interaction, button: ui.Button):
         if not _is_admin(interaction.user):
-            return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
         curr = database.get_market_state()
         database.set_market_status(curr.get("status", "OPEN"), scheduled_open="", scheduled_close="")
         await self._refresh(interaction)
 
-    # ── Odswierz panel ──────────────────────────────────────────────────────
-    @ui.button(label="🔄 Odswiez", style=discord.ButtonStyle.secondary,
+    # ── Odśwież panel ──────────────────────────────────────────────────────
+    @ui.button(label="🔄 Odśwież", style=discord.ButtonStyle.secondary,
                custom_id="mkt_refresh", row=0)
     async def btn_refresh(self, interaction: discord.Interaction, button: ui.Button):
         await self._refresh(interaction)
@@ -170,89 +169,89 @@ class SetupCog(commands.Cog):
         self._build_tree()
 
     def _build_tree(self):
-        # Korzen
+        # Korzeń
         setup = app_commands.Group(
             name="setup",
             description="Panel administracyjny ligi"
         )
 
         # Subgrupy
-        liga   = app_commands.Group(name="liga",  description="Ustawienia ogolne ligi",        parent=setup)
-        kanal  = app_commands.Group(name="kanal", description="ID kanalow Discord",             parent=setup)
-        rola   = app_commands.Group(name="rola",  description="ID rol Discord",                 parent=setup)
-        rynek  = app_commands.Group(name="rynek", description="Zarzadzanie rynkiem transferowym", parent=setup)
+        liga   = app_commands.Group(name="liga",  description="Ustawienia ogólne ligi",        parent=setup)
+        kanal  = app_commands.Group(name="kanal", description="ID kanałów Discord",             parent=setup)
+        rola   = app_commands.Group(name="rola",  description="ID ról Discord",                 parent=setup)
+        rynek  = app_commands.Group(name="rynek", description="Zarządzanie rynkiem transferowym", parent=setup)
 
-        # ── /setup (bez subkomendy) → panel z UI ──────────────────────────
-        @setup.command(name="panel", description="Otworz interaktywny panel administracyjny ligi")
+        # ── /setup panel (bez subkomendy) → panel z UI ──────────────────────────
+        @setup.command(name="panel", description="Otwórz interaktywny panel administracyjny ligi")
         async def slash_setup_panel(interaction: discord.Interaction):
             if not _is_admin(interaction.user):
-                return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+                return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
             embed = _build_panel_embed()
             view = SetupPanelView(interaction.guild)
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
         # ── /setup liga ───────────────────────────────────────────────────
 
-        @liga.command(name="max_graczy", description="Zmien maksymalna liczbe graczy w klubie")
+        @liga.command(name="max_graczy", description="Zmień maksymalną liczbę graczy w klubie")
         @app_commands.describe(liczba="Liczba od 1 do 25")
         async def slash_liga_max(interaction: discord.Interaction, liczba: int):
-            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
             if not 1 <= liczba <= 25:
-                return await interaction.response.send_message("❌ Wartose musi byc od **1** do **25**.", ephemeral=True)
+                return await interaction.response.send_message("❌ Wartość musi być od **1** do **25**.", ephemeral=True)
             cfg.set_config("cfg_max_players", str(liczba))
             await interaction.response.send_message(
-                embed=_ok(f"Max graczy w klubie zmienione na **{liczba}**.\nLimit bedzie widoczny w panelu po ponownym wyslaniu `!setup_panel`."),
+                embed=_ok(f"Max graczy w klubie zmienione na **{liczba}**.\nLimit będzie widoczny w panelu po ponownym wysłaniu `!setup_panel`."),
                 ephemeral=True
             )
 
-        @liga.command(name="sezon", description="Zmien oznaczenie aktualnego sezonu (np. 2027/28)")
-        @app_commands.describe(label="Krotkie oznaczenie, np. 2026/27")
+        @liga.command(name="sezon", description="Zmień oznaczenie aktualnego sezonu (np. 2026/27)")
+        @app_commands.describe(label="Krótkie oznaczenie, np. 2026/27")
         async def slash_liga_sezon(interaction: discord.Interaction, label: str):
-            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
-            if len(label) > 20: return await interaction.response.send_message("❌ Za dlugie (max 20 znakow).", ephemeral=True)
+            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
+            if len(label) > 20: return await interaction.response.send_message("❌ Za długie (max 20 znaków).", ephemeral=True)
             cfg.set_config("cfg_season_label", label)
             await interaction.response.send_message(embed=_ok(f"Sezon ustawiony na **{label}**."), ephemeral=True)
 
-        @liga.command(name="nazwa", description="Zmien nazwe organizacji (widoczna w stopkach embedow)")
-        @app_commands.describe(nazwa="Pelna nazwa, np. Federacja Siatkowki Stolowej (FSS)")
+        @liga.command(name="nazwa", description="Zmień nazwę organizacji (widoczna w stopkach embedów)")
+        @app_commands.describe(nazwa="Pełna nazwa, np. Federacja Siatkówki Stołowej (FSS)")
         async def slash_liga_nazwa(interaction: discord.Interaction, nazwa: str):
-            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
-            if len(nazwa) > 50: return await interaction.response.send_message("❌ Za dluga (max 50 znakow).", ephemeral=True)
+            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
+            if len(nazwa) > 50: return await interaction.response.send_message("❌ Za długa (max 50 znaków).", ephemeral=True)
             cfg.set_config("cfg_league_name", nazwa)
             await interaction.response.send_message(embed=_ok(f"Nazwa organizacji zmieniona na **{nazwa}**."), ephemeral=True)
 
 
         # ── /setup kanal ──────────────────────────────────────────────────
 
-        @kanal.command(name="forum", description="Ustaw ID kanalu forum (gdzie trafiaja wnioski transferowe)")
-        @app_commands.describe(id_kanalu="ID kanalu Discord (PPM → Kopiuj ID)")
+        @kanal.command(name="forum", description="Ustaw ID kanału forum (gdzie trafiają wnioski transferowe)")
+        @app_commands.describe(id_kanalu="ID kanału Discord (PPM → Kopiuj ID)")
         async def slash_kanal_forum(interaction: discord.Interaction, id_kanalu: str):
-            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
             try:
                 cid = int(id_kanalu)
                 ch = interaction.guild.get_channel(cid)
-                if not ch: return await interaction.response.send_message(f"❌ Kanal `{cid}` nie istnieje na serwerze.", ephemeral=True)
+                if not ch: return await interaction.response.send_message(f"❌ Kanał `{cid}` nie istnieje na serwerze.", ephemeral=True)
                 cfg.set_config("cfg_channel_forum", str(cid))
-                await interaction.response.send_message(embed=_ok(f"Kanal forum: {ch.mention}"), ephemeral=True)
+                await interaction.response.send_message(embed=_ok(f"Kanał forum: {ch.mention}"), ephemeral=True)
             except ValueError:
                 await interaction.response.send_message("❌ Wpisz samo ID (same cyfry).", ephemeral=True)
 
-        @kanal.command(name="komunikaty", description="Ustaw ID kanalu oficjalnych komunikatow ligi")
-        @app_commands.describe(id_kanalu="ID kanalu Discord")
+        @kanal.command(name="komunikaty", description="Ustaw ID kanału oficjalnych komunikatów ligi")
+        @app_commands.describe(id_kanalu="ID kanału Discord")
         async def slash_kanal_komunikaty(interaction: discord.Interaction, id_kanalu: str):
-            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
             try:
                 cid = int(id_kanalu)
                 ch = interaction.guild.get_channel(cid)
-                if not ch: return await interaction.response.send_message(f"❌ Kanal `{cid}` nie istnieje na serwerze.", ephemeral=True)
+                if not ch: return await interaction.response.send_message(f"❌ Kanał `{cid}` nie istnieje na serwerze.", ephemeral=True)
                 cfg.set_config("cfg_channel_komunikaty", str(cid))
-                await interaction.response.send_message(embed=_ok(f"Kanal komunikatow: {ch.mention}"), ephemeral=True)
+                await interaction.response.send_message(embed=_ok(f"Kanał komunikatów: {ch.mention}"), ephemeral=True)
             except ValueError:
                 await interaction.response.send_message("❌ Wpisz samo ID (same cyfry).", ephemeral=True)
 
         # ── /setup rola ───────────────────────────────────────────────────
 
-        @rola.command(name="federacja", description="Ustaw ID roli Zarzadu Federacji")
+        @rola.command(name="federacja", description="Ustaw ID roli Zarządu Federacji")
         @app_commands.describe(id_roli="ID roli Discord")
         async def slash_rola_fed(interaction: discord.Interaction, id_roli: str):
             if not interaction.user.guild_permissions.administrator:
@@ -284,57 +283,57 @@ class SetupCog(commands.Cog):
 
         @rynek.command(name="otworz", description="Natychmiastowe otwarcie rynku transferowego")
         async def slash_rynek_otw(interaction: discord.Interaction):
-            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
             database.set_market_status("OPEN", scheduled_open="")
             await announce_market_change(
                 interaction.client,
-                "🔓 **RYNEK TRANSFEROWY ZOSTAL OTWARTY!**\n"
-                "> Zarzad Federacji otworzyl okienko transferowe!\n"
-                "> Skladanie wnioskow transferowych, kontraktowych i wypozyczen zostalo odblokowane.",
+                "🔓 **RYNEK TRANSFEROWY ZOSTAŁ OTWARTY!**\n"
+                "> Zarząd Federacji otworzył okienko transferowe!\n"
+                "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało odblokowane.",
                 guild=interaction.guild
             )
-            await interaction.response.send_message(embed=_ok("Rynek **otwarty**. Komunikat wyslany."), ephemeral=True)
+            await interaction.response.send_message(embed=_ok("Rynek **otwarty**. Komunikat wysłany."), ephemeral=True)
 
-        @rynek.command(name="zamknij", description="Natychmiastowe zamkniecie rynku transferowego")
+        @rynek.command(name="zamknij", description="Natychmiastowe zamknięcie rynku transferowego")
         async def slash_rynek_zam(interaction: discord.Interaction):
-            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
             database.set_market_status("CLOSED", scheduled_close="")
             await announce_market_change(
                 interaction.client,
-                "🔒 **RYNEK TRANSFEROWY ZOSTAL ZAMKNIETY!**\n"
-                "> Zarzad Federacji zamknal okienko transferowe.\n"
-                "> Skladanie wnioskow transferowych, kontraktowych i wypozyczen zostalo zablokowane.",
+                "🔒 **RYNEK TRANSFEROWY ZOSTAŁ ZAMKNIĘTY!**\n"
+                "> Zarząd Federacji zamknął okienko transferowe.\n"
+                "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało zablokowane.",
                 guild=interaction.guild
             )
-            await interaction.response.send_message(embed=_ok("Rynek **zamkniety**. Komunikat wyslany."), ephemeral=True)
+            await interaction.response.send_message(embed=_ok("Rynek **zamknięty**. Komunikat wysłany."), ephemeral=True)
 
-        @rynek.command(name="zaplanuj_zamkniecie", description="Zaplanuj automatyczne zamkniecie rynku")
+        @rynek.command(name="zaplanuj_zamkniecie", description="Zaplanuj automatyczne zamknięcie rynku")
         @app_commands.describe(termin="Np. 20.09.2026 18:00 | 2h | 3d")
         async def slash_rynek_plan_close(interaction: discord.Interaction, termin: str):
-            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
             dt_str = parse_schedule_datetime(termin)
-            if not dt_str: return await interaction.response.send_message("❌ Nieprawidlowy format. Przyklad: `20.09.2026 18:00` lub `2h`, `3d`.", ephemeral=True)
+            if not dt_str: return await interaction.response.send_message("❌ Nieprawidłowy format. Przykład: `20.09.2026 18:00` lub `2h`, `3d`.", ephemeral=True)
             curr = database.get_market_state()
             database.set_market_status(curr.get("status", "OPEN"), scheduled_close=dt_str)
             await announce_market_change(
                 interaction.client,
-                f"⏰ **ZAPLANOWANO ZAMKNIECIE OKIENKA TRANSFEROWEGO!**\n> Zamkniecie nastapi: {format_schedule_discord(dt_str)}",
+                f"⏰ **ZAPLANOWANO ZAMKNIĘCIE OKIENKA TRANSFEROWEGO!**\n> Zamknięcie nastąpi: {format_schedule_discord(dt_str)}",
                 guild=interaction.guild
             )
             await interaction.response.send_message(
-                embed=_ok(f"Zaplanowano zamkniecie: {format_schedule_discord(dt_str)}"), ephemeral=True)
+                embed=_ok(f"Zaplanowano zamknięcie: {format_schedule_discord(dt_str)}"), ephemeral=True)
 
         @rynek.command(name="zaplanuj_otwarcie", description="Zaplanuj automatyczne otwarcie rynku")
         @app_commands.describe(termin="Np. 20.09.2026 18:00 | 2h | 3d")
         async def slash_rynek_plan_open(interaction: discord.Interaction, termin: str):
-            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
             dt_str = parse_schedule_datetime(termin)
-            if not dt_str: return await interaction.response.send_message("❌ Nieprawidlowy format. Przyklad: `20.09.2026 18:00` lub `2h`, `3d`.", ephemeral=True)
+            if not dt_str: return await interaction.response.send_message("❌ Nieprawidłowy format. Przykład: `20.09.2026 18:00` lub `2h`, `3d`.", ephemeral=True)
             curr = database.get_market_state()
             database.set_market_status(curr.get("status", "OPEN"), scheduled_open=dt_str)
             await announce_market_change(
                 interaction.client,
-                f"🔓 **ZAPLANOWANO OTWARCIE OKIENKA TRANSFEROWEGO!**\n> Otwarcie nastapi: {format_schedule_discord(dt_str)}",
+                f"🔓 **ZAPLANOWANO OTWARCIE OKIENKA TRANSFEROWEGO!**\n> Otwarcie nastąpi: {format_schedule_discord(dt_str)}",
                 guild=interaction.guild
             )
             await interaction.response.send_message(
@@ -342,7 +341,7 @@ class SetupCog(commands.Cog):
 
         @rynek.command(name="anuluj_harmonogram", description="Anuluj zaplanowane automatyczne zmiany statusu rynku")
         async def slash_rynek_cancel(interaction: discord.Interaction):
-            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnien.", ephemeral=True)
+            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
             curr = database.get_market_state()
             database.set_market_status(curr.get("status", "OPEN"), scheduled_open="", scheduled_close="")
             await interaction.response.send_message(embed=_ok("Harmonogram rynku wyczyszczony."), ephemeral=True)
