@@ -130,7 +130,11 @@ def init_db():
             _migrate_columns(cursor)
             conn.commit()
 
-    _import_legacy_json_if_needed()
+    if os.path.exists(LEGACY_JSON_DB):
+        try:
+            os.remove(LEGACY_JSON_DB)
+        except Exception:
+            pass
 
 def _migrate_columns(cursor):
     """Bezpieczne dodanie brakujących kolumn do istniejących tabel."""
@@ -167,49 +171,6 @@ def _migrate_columns(cursor):
     }.items():
         if col not in fa_cols:
             cursor.execute(f"ALTER TABLE free_agents ADD COLUMN {col} {typ}")
-
-def _import_legacy_json_if_needed():
-    if not os.path.exists(LEGACY_JSON_DB):
-        return
-
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM clubs")
-        if cursor.fetchone()[0] > 0:
-            return
-
-        try:
-            with open(LEGACY_JSON_DB, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception as e:
-            print(f"[DB] Błąd odczytu {LEGACY_JSON_DB}: {e}")
-            return
-
-        if not data.get("kluby") and not data.get("zawodnicy"):
-            return
-
-        print(f"[DB] Migracja z {LEGACY_JSON_DB}...")
-        cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', ?)",
-                       (data.get("ticket_counter", 0),))
-
-        for tag, cd in data.get("kluby", {}).items():
-            rep_id = cd.get("reprezentant_dc")
-            cursor.execute("""
-                INSERT OR REPLACE INTO clubs (tag, name, role_board_id, role_player_id, reprezentant_dc, founder_txt, board_txt, board_ids)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (tag.upper(), cd.get("nazwa", tag), cd.get("rola_zarzad", 0),
-                  cd.get("rola_zawodnik", 0), rep_id, "", "", json.dumps([rep_id] if rep_id else [])))
-
-        for name, pd in data.get("zawodnicy", {}).items():
-            cursor.execute("""
-                INSERT OR REPLACE INTO players (name, discord_id, club_tag, parent_club_tag, clause, contract_type, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (name, pd.get("gracz_dc_id"), pd.get("klub"),
-                  pd.get("klub_macierzysty", pd.get("klub")),
-                  pd.get("klauzula", "Brak"), pd.get("typ", "TRANSFER"), pd.get("wazny_do")))
-
-        conn.commit()
-        print("[DB] Migracja zakończona.")
 
 # ==================== LICZNIKI ====================
 def get_next_ticket_id() -> str:

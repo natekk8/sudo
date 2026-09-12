@@ -572,6 +572,28 @@ class TestDatabase(unittest.TestCase):
         database.terminate_player_contract("Inny Zapis", discord_id=7777)
         self.assertIsNone(database.get_player_by_discord_id(7777))
 
+    # ── Test Formatowania Harmonogramu Rynku ──
+    def test_format_schedule_discord(self):
+        from utils.helpers import format_schedule_discord
+        formatted = format_schedule_discord("2026-09-20 18:00:00")
+        self.assertTrue(formatted.startswith("<t:"))
+        self.assertIn(":F>", formatted)
+        self.assertIn(":R>", formatted)
+
+    # ── Test Resetu Licznika Ticketów od 1 ──
+    def test_reset_sequence_starts_at_one(self):
+        database.add_club("TST", "Test Club", 1, 2)
+        app_id_1 = database.create_application("Wniosek stary", "opis", 123)
+        self.assertGreaterEqual(app_id_1, 1)
+
+        # Reset sezonu
+        database.reset_database_for_new_season()
+
+        # Kolejny utworzony wniosek musi otrzymać numer 1 (#001)
+        app_id_new = database.create_application("Wniosek nowy", "opis", 123)
+        self.assertEqual(app_id_new, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
+

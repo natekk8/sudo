@@ -3,11 +3,11 @@ import discord
 from discord.ext import tasks
 import database
 from config import CHANNEL_KOMUNIKATY_ID
-from utils.helpers import send_dm, get_now_warsaw, get_or_fetch_member
+from utils.helpers import send_dm, get_now_warsaw, get_or_fetch_member, get_komunikaty_channel, format_schedule_discord
 
 def setup_expirations_task(bot: discord.Client, guild_id: int = None):
 
-    @tasks.loop(minutes=2)
+    @tasks.loop(seconds=30)
     async def check_expirations():
         await bot.wait_until_ready()
 
@@ -20,45 +20,44 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
             print("[Expirations] Nie znaleziono serwera. Sprawdź GUILD_ID w config.")
             return
 
-        kom_channel = guild.get_channel(CHANNEL_KOMUNIKATY_ID)
+        kom_channel = await get_komunikaty_channel(bot, guild)
         now = get_now_warsaw()
 
         # ── 0. Harmonogram Otwarcia / Zamknięcia Rynku Transferowego ──
         try:
             market_state = database.get_market_state()
-            current_status = market_state.get("status", "OPEN")
             close_at_str = market_state.get("close_at")
             open_at_str = market_state.get("open_at")
 
-            # Sprawdzenie planowanego zamknięcia rynku
-            if close_at_str and current_status != "CLOSED":
+            # Sprawdzenie planowanego zamknięcia rynku (gdy wybije wyznaczona godzina i data)
+            if close_at_str:
                 try:
                     close_dt = datetime.strptime(close_at_str, "%Y-%m-%d %H:%M:%S")
                     if now >= close_dt:
                         database.set_market_status("CLOSED", scheduled_close="")
-                        print(f"[Market] Rynek transferowy został automatycznie ZAMKNIĘTY o {now}.")
+                        print(f"[Market] Wybiła wyznaczona godzina zamknięcia rynku ({close_at_str}). Rynek ZAMKNIĘTY.")
                         if kom_channel:
                             await kom_channel.send(
                                 "🔒 **RYNEK TRANSFEROWY ZOSTAŁ ZAMKNIĘTY!**\n"
-                                "> Zgodnie z harmonogramem ligi okienko transferowe zostało zamknięte.\n"
-                                "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało zablokowane.",
+                                f"> Wybiła zaplanowana data i godzina zamknięcia okienka ({format_schedule_discord(close_at_str)}).\n"
+                                "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało oficjalnie **zablokowane**.",
                                 allowed_mentions=discord.AllowedMentions.none()
                             )
                 except ValueError:
                     pass
 
-            # Sprawdzenie planowanego otwarcia rynku
-            if open_at_str and current_status == "CLOSED":
+            # Sprawdzenie planowanego otwarcia rynku (gdy wybije wyznaczona godzina i data)
+            if open_at_str:
                 try:
                     open_dt = datetime.strptime(open_at_str, "%Y-%m-%d %H:%M:%S")
                     if now >= open_dt:
                         database.set_market_status("OPEN", scheduled_open="")
-                        print(f"[Market] Rynek transferowy został automatycznie OTWARTY o {now}.")
+                        print(f"[Market] Wybiła wyznaczona godzina otwarcia rynku ({open_at_str}). Rynek OTWARTY.")
                         if kom_channel:
                             await kom_channel.send(
                                 "🔓 **RYNEK TRANSFEROWY ZOSTAŁ OTWARTY!**\n"
-                                "> Zgodnie z harmonogramem ligi okienko transferowe zostało otwarte!\n"
-                                "> Kluby mogą rejestrować wolnych agentów, realizować transfery i wypożyczenia.",
+                                f"> Wybiła zaplanowana data i godzina otwarcia okienka ({format_schedule_discord(open_at_str)})!\n"
+                                "> Kluby mogą oficjalnie rejestrować wolnych agentów, realizować transfery i wypożyczenia!",
                                 allowed_mentions=discord.AllowedMentions.none()
                             )
                 except ValueError:

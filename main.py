@@ -10,9 +10,12 @@ from views.main_panel import WidokPaneluGlownego
 from views.market_panel import WidokRynkuTransferowego
 from views.application_view import ForumApplicationView
 from tasks.expirations import setup_expirations_task
-from utils.helpers import is_federation, parse_schedule_datetime, format_expiry_discord
+from utils.helpers import (
+    is_federation, parse_schedule_datetime, format_expiry_discord,
+    format_schedule_discord, get_komunikaty_channel
+)
 
-# Inicjalizacja bazy danych SQLite i ewentualna migracja ze starego JSON
+# Inicjalizacja bazy danych SQLite
 database.init_db()
 
 intents = discord.Intents.default()
@@ -31,28 +34,31 @@ def build_market_status_embed() -> discord.Embed:
     close_at = state.get("close_at")
 
     color = 0x2ecc71 if is_open else 0xe74c3c
-    title = "🟢 Rynek Transferowy jest OTWARTY" if is_open else "🔴 Rynek Transferowy jest ZAMKNIĘTY"
+    title = "🟢 Rynek Transferowy: OTWARTY" if is_open else "🔴 Rynek Transferowy: ZAMKNIĘTY"
 
-    desc = (
-        "Kluby mogą składać wnioski o podpisanie wolnych agentów, transfery oraz wypożyczenia."
+    status_line = "**Aktualny stan rynku:** 🟢 **OTWARTY**" if is_open else "**Aktualny stan rynku:** 🔴 **ZAMKNIĘTY**"
+    details = (
+        "Wnioski o podpisanie wolnych agentów, transfery oraz wypożyczenia są obecnie **odblokowane**."
         if is_open else
         "Wnioski o podpisanie wolnych agentów, transfery oraz wypożyczenia są obecnie **zablokowane**."
     )
 
-    embed = discord.Embed(title=title, description=desc, color=color)
+    embed = discord.Embed(title=title, description=f"{status_line}\n> {details}", color=color)
 
     if close_at:
-        embed.add_field(name="⏰ Zaplanowane zamknięcie", value=format_expiry_discord(close_at), inline=False)
+        embed.add_field(name="⏰ Zaplanowane zamknięcie", value=format_schedule_discord(close_at), inline=False)
     if open_at:
-        embed.add_field(name="🔓 Zaplanowane otwarcie", value=format_expiry_discord(open_at), inline=False)
+        embed.add_field(name="🔓 Zaplanowane otwarcie", value=format_schedule_discord(open_at), inline=False)
+
+    if not close_at and not open_at:
+        embed.add_field(name="📅 Harmonogram", value="*Brak zaplanowanych automatycznych zmian statusu.*", inline=False)
 
     embed.set_footer(text="Liga Federacji • Okienko Transferowe")
     return embed
 
 
-async def announce_market_change(guild: discord.Guild, message: str):
-    if not guild: return
-    channel = guild.get_channel(CHANNEL_KOMUNIKATY_ID)
+async def announce_market_change(client: discord.Client, message: str, guild: discord.Guild = None):
+    channel = await get_komunikaty_channel(client, guild)
     if channel:
         try:
             await channel.send(message, allowed_mentions=discord.AllowedMentions.none())
@@ -165,18 +171,22 @@ async def db_stats(ctx):
     await ctx.reply(embed=embed)
 
 
-# ─── KOMENDA RESETU SEZONU (ADMINISTRATOR) ───
-@bot.command()
-@commands.has_permissions(administrator=True)
+# ─── KOMENDA RESETU SEZONU (ADMINISTRATOR / FEDERACJA) ───
+@bot.command(name="reset_sezon", aliases=["reset_bazy", "reset_ligi", "reset"])
 async def reset_sezon(ctx):
     """Czyści bazę danych i liczniki, przygotowując ligę na nowy sezon 2026/27."""
+    if not (ctx.author.guild_permissions.administrator or is_federation(ctx.author)):
+        return await ctx.reply("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.")
+
     database.reset_database_for_new_season()
     embed = discord.Embed(
         title="🏆 Nowy Sezon 2026/27 Rozpoczęty!",
         description=(
-            "Baza danych została zresetowana i zainicjowana na nowy sezon 2026/27:\n"
+            "Baza danych została całkowicie zresetowana i zainicjowana na nowy sezon 2026/27:\n"
             "• Tabele `players`, `clubs`, `applications`, `transfer_history`, `free_agents` zostały wyczyszczone.\n"
-            "• Licznik ticketów zresetowany do 0.\n"
+            "• Licznik ticketów zresetowany do zera (kolejny wniosek otrzyma numer #001).\n"
+            "• Usunięto ewentualne pozostałości starych plików JSON.\n"
+            "• Baza SQLite została zoptymalizowana (`VACUUM`).\n"
             "• Okienko transferowe ustawione w stan: **OTWARTY**.\n\n"
             "Zarządy mogą rejestrować nowe kluby i zgłaszać zawodników."
         ),
@@ -184,6 +194,29 @@ async def reset_sezon(ctx):
     )
     embed.set_footer(text="Liga Federacji • Sezon 2026/27")
     await ctx.reply(embed=embed)
+
+
+@bot.tree.command(name="reset_sezon", description="Zresetuj bazę danych i liczniki ligi na nowy sezon 2026/27")
+async def slash_reset_sezon(interaction: discord.Interaction):
+    """Slash command do resetu ligi na nowy sezon."""
+    if not (interaction.user.guild_permissions.administrator or is_federation(interaction.user)):
+        return await interaction.response.send_message("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.", ephemeral=True)
+
+    database.reset_database_for_new_season()
+    embed = discord.Embed(
+        title="🏆 Nowy Sezon 2026/27 Rozpoczęty!",
+        description=(
+            "Baza danych została całkowicie zresetowana i zainicjowana na nowy sezon 2026/27:\n"
+            "• Tabele `players`, `clubs`, `applications`, `transfer_history`, `free_agents` zostały wyczyszczone.\n"
+            "• Licznik ticketów zresetowany do zera (kolejny wniosek otrzyma numer #001).\n"
+            "• Baza SQLite została zoptymalizowana (`VACUUM`).\n"
+            "• Okienko transferowe ustawione w stan: **OTWARTY**.\n\n"
+            "Zarządy mogą rejestrować nowe kluby i zgłaszać zawodników."
+        ),
+        color=0x2ecc71
+    )
+    embed.set_footer(text="Liga Federacji • Sezon 2026/27")
+    await interaction.response.send_message(embed=embed)
 
 
 # ─── SLASH COMMANDS: /RYNEK (ADMIN / FEDERACJA) ───
@@ -200,10 +233,11 @@ async def slash_rynek_otworz(interaction: discord.Interaction):
         return await interaction.response.send_message("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.", ephemeral=True)
     database.set_market_status("OPEN", scheduled_open="")
     await announce_market_change(
-        interaction.guild,
+        interaction.client,
         "🔓 **RYNEK TRANSFEROWY ZOSTAŁ OTWARTY!**\n"
         "> Zarząd Federacji otworzył okienko transferowe!\n"
-        "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało odblokowane."
+        "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało odblokowane.",
+        guild=interaction.guild
     )
     await interaction.response.send_message("✅ Rynek transferowy został otwarty!", ephemeral=True)
 
@@ -213,10 +247,11 @@ async def slash_rynek_zamknij(interaction: discord.Interaction):
         return await interaction.response.send_message("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.", ephemeral=True)
     database.set_market_status("CLOSED", scheduled_close="")
     await announce_market_change(
-        interaction.guild,
+        interaction.client,
         "🔒 **RYNEK TRANSFEROWY ZOSTAŁ ZAMKNIĘTY!**\n"
         "> Zarząd Federacji zamknął okienko transferowe.\n"
-        "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało zablokowane."
+        "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało zablokowane.",
+        guild=interaction.guild
     )
     await interaction.response.send_message("✅ Rynek transferowy został zamknięty!", ephemeral=True)
 
@@ -231,11 +266,12 @@ async def slash_rynek_plan_close(interaction: discord.Interaction, termin: str):
     curr = database.get_market_state()
     database.set_market_status(curr.get("status", "OPEN"), scheduled_close=dt_str)
     await announce_market_change(
-        interaction.guild,
+        interaction.client,
         f"⏰ **ZAPLANOWANO ZAMKNIĘCIE OKIENKA TRANSFEROWEGO!**\n"
-        f"> Zamknięcie nastąpi: {format_expiry_discord(dt_str)}"
+        f"> Zamknięcie nastąpi: {format_schedule_discord(dt_str)}",
+        guild=interaction.guild
     )
-    await interaction.response.send_message(f"✅ Zaplanowano zamknięcie rynku na: `{dt_str}` ({format_expiry_discord(dt_str)}).", ephemeral=True)
+    await interaction.response.send_message(f"✅ Zaplanowano zamknięcie rynku na: `{dt_str}` ({format_schedule_discord(dt_str)}).", ephemeral=True)
 
 @rynek_slash_group.command(name="zaplanuj_otwarcie", description="Zaplanuj automatyczne otwarcie rynku transferowego")
 @app_commands.describe(termin="Data i godzina (np. 20.09.2026 18:00 lub 2h, 3d)")
@@ -248,11 +284,28 @@ async def slash_rynek_plan_open(interaction: discord.Interaction, termin: str):
     curr = database.get_market_state()
     database.set_market_status(curr.get("status", "OPEN"), scheduled_open=dt_str)
     await announce_market_change(
-        interaction.guild,
+        interaction.client,
         f"🔓 **ZAPLANOWANO OTWARCIE OKIENKA TRANSFEROWEGO!**\n"
-        f"> Otwarcie nastąpi: {format_expiry_discord(dt_str)}"
+        f"> Otwarcie nastąpi: {format_schedule_discord(dt_str)}",
+        guild=interaction.guild
     )
-    await interaction.response.send_message(f"✅ Zaplanowano otwarcie rynku na: `{dt_str}` ({format_expiry_discord(dt_str)}).", ephemeral=True)
+    await interaction.response.send_message(f"✅ Zaplanowano otwarcie rynku na: `{dt_str}` ({format_schedule_discord(dt_str)}).", ephemeral=True)
+
+@rynek_slash_group.command(name="reset_bazy", description="Reset bazy danych na nowy sezon 2026/27 (Zarząd Federacji / Admin)")
+async def slash_rynek_reset_bazy(interaction: discord.Interaction):
+    if not (interaction.user.guild_permissions.administrator or is_federation(interaction.user)):
+        return await interaction.response.send_message("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.", ephemeral=True)
+    database.reset_database_for_new_season()
+    embed = discord.Embed(
+        title="🏆 Nowy Sezon 2026/27 Rozpoczęty!",
+        description=(
+            "Baza danych została zresetowana na nowy sezon 2026/27:\n"
+            "• Wszystkie tabele i liczniki ticketów zresetowane.\n"
+            "• Okienko transferowe ustawione w stan: **OTWARTY**."
+        ),
+        color=0x2ecc71
+    )
+    await interaction.response.send_message(embed=embed)
 
 bot.tree.add_command(rynek_slash_group)
 
@@ -275,10 +328,11 @@ async def rynek_prefix_otworz(ctx):
         return await ctx.reply("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.")
     database.set_market_status("OPEN", scheduled_open="")
     await announce_market_change(
-        ctx.guild,
+        ctx.bot,
         "🔓 **RYNEK TRANSFEROWY ZOSTAŁ OTWARTY!**\n"
         "> Zarząd Federacji otworzył okienko transferowe!\n"
-        "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało odblokowane."
+        "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało odblokowane.",
+        guild=ctx.guild
     )
     await ctx.reply("✅ Rynek transferowy został otwarty!")
 
@@ -288,10 +342,11 @@ async def rynek_prefix_zamknij(ctx):
         return await ctx.reply("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.")
     database.set_market_status("CLOSED", scheduled_close="")
     await announce_market_change(
-        ctx.guild,
+        ctx.bot,
         "🔒 **RYNEK TRANSFEROWY ZOSTAŁ ZAMKNIĘTY!**\n"
         "> Zarząd Federacji zamknął okienko transferowe.\n"
-        "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało zablokowane."
+        "> Składanie wniosków transferowych, kontraktowych i wypożyczeń zostało zablokowane.",
+        guild=ctx.guild
     )
     await ctx.reply("✅ Rynek transferowy został zamknięty!")
 
@@ -305,11 +360,12 @@ async def rynek_prefix_plan_close(ctx, *, termin: str):
     curr = database.get_market_state()
     database.set_market_status(curr.get("status", "OPEN"), scheduled_close=dt_str)
     await announce_market_change(
-        ctx.guild,
+        ctx.bot,
         f"⏰ **ZAPLANOWANO ZAMKNIĘCIE OKIENKA TRANSFEROWEGO!**\n"
-        f"> Zamknięcie nastąpi: {format_expiry_discord(dt_str)}"
+        f"> Zamknięcie nastąpi: {format_schedule_discord(dt_str)}",
+        guild=ctx.guild
     )
-    await ctx.reply(f"✅ Zaplanowano zamknięcie rynku na: `{dt_str}` ({format_expiry_discord(dt_str)}).")
+    await ctx.reply(f"✅ Zaplanowano zamknięcie rynku na: `{dt_str}` ({format_schedule_discord(dt_str)}).")
 
 @rynek_prefix_group.command(name="zaplanuj_otwarcie")
 async def rynek_prefix_plan_open(ctx, *, termin: str):
@@ -321,11 +377,28 @@ async def rynek_prefix_plan_open(ctx, *, termin: str):
     curr = database.get_market_state()
     database.set_market_status(curr.get("status", "OPEN"), scheduled_open=dt_str)
     await announce_market_change(
-        ctx.guild,
+        ctx.bot,
         f"🔓 **ZAPLANOWANO OTWARCIE OKIENKA TRANSFEROWEGO!**\n"
-        f"> Otwarcie nastąpi: {format_expiry_discord(dt_str)}"
+        f"> Otwarcie nastąpi: {format_schedule_discord(dt_str)}",
+        guild=ctx.guild
     )
-    await ctx.reply(f"✅ Zaplanowano otwarcie rynku na: `{dt_str}` ({format_expiry_discord(dt_str)}).")
+    await ctx.reply(f"✅ Zaplanowano otwarcie rynku na: `{dt_str}` ({format_schedule_discord(dt_str)}).")
+
+@rynek_prefix_group.command(name="reset_bazy")
+async def rynek_prefix_reset_bazy(ctx):
+    if not (ctx.author.guild_permissions.administrator or is_federation(ctx.author)):
+        return await ctx.reply("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.")
+    database.reset_database_for_new_season()
+    embed = discord.Embed(
+        title="🏆 Nowy Sezon 2026/27 Rozpoczęty!",
+        description=(
+            "Baza danych została zresetowana na nowy sezon 2026/27:\n"
+            "• Wszystkie tabele i liczniki ticketów zresetowane.\n"
+            "• Okienko transferowe ustawione w stan: **OTWARTY**."
+        ),
+        color=0x2ecc71
+    )
+    await ctx.reply(embed=embed)
 
 
 # ─── BOT START / RESTART (PERSISTENT VIEWS & TREE SYNC) ───

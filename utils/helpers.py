@@ -171,12 +171,22 @@ def format_expiry_discord(expires_at: str) -> str:
     if not expires_at: return "Brak"
     try:
         dt = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
-        # Zakładamy, że data jest w strefie Europe/Warsaw
         dt = dt.replace(tzinfo=WARSAW_TZ)
         ts = int(dt.timestamp())
-        return f"<t:{ts}:R> (<t:{ts}:D>)"
+        return f"<t:{ts}:f> (<t:{ts}:R>)"
     except Exception:
         return expires_at
+
+def format_schedule_discord(dt_str: str) -> str:
+    """Formatuje datę i godzinę harmonogramu rynku: pełna data z godziną oraz relatywne odliczanie."""
+    if not dt_str: return "Brak"
+    try:
+        dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+        dt = dt.replace(tzinfo=WARSAW_TZ)
+        ts = int(dt.timestamp())
+        return f"<t:{ts}:F> (<t:{ts}:R>)"
+    except Exception:
+        return dt_str
 
 def build_squad_bar(count: int, max_count: int) -> str:
     filled = "■" * count
@@ -185,6 +195,20 @@ def build_squad_bar(count: int, max_count: int) -> str:
     return f"`[{filled}{empty}] {count}/{max_count}` · {label}"
 
 # ─── Discord Helpers ───
+async def get_komunikaty_channel(client: discord.Client, guild: discord.Guild = None) -> discord.TextChannel | None:
+    """Niezawodne pobranie kanału oficjalnych komunikatów ligowych (z obsługą API fetch)."""
+    if not client: return None
+    from config import CHANNEL_KOMUNIKATY_ID
+    channel = client.get_channel(CHANNEL_KOMUNIKATY_ID)
+    if not channel and guild:
+        channel = guild.get_channel(CHANNEL_KOMUNIKATY_ID)
+    if not channel:
+        try:
+            channel = await client.fetch_channel(CHANNEL_KOMUNIKATY_ID)
+        except Exception as e:
+            print(f"[Komunikaty] Nie można pobrać kanału {CHANNEL_KOMUNIKATY_ID}: {e}")
+    return channel
+
 async def ping_representatives(thread: discord.Thread, target_tag: str, source_tag: str = None):
     ids = []
     for tag in filter(None, [target_tag, source_tag]):
