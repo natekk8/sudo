@@ -54,7 +54,6 @@ def clean_tag(tag: str):
 
 def parse_expiry_date(user_input: str):
     user_input = user_input.strip()
-    # 1. Wariant liczby dni (np. '30' lub '30 dni')
     match_days = re.match(r'^(\d+)(\s*(dni|d|day|days))?$', user_input, re.IGNORECASE)
     if match_days:
         days = int(match_days.group(1))
@@ -62,7 +61,6 @@ def parse_expiry_date(user_input: str):
             return None
         return (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     
-    # 2. Wariant konkretnej daty DD.MM.RRRR
     for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
         try:
             dt = datetime.strptime(user_input, fmt)
@@ -95,7 +93,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ==========================================
 class WniosekConfirmView(ui.View):
     def __init__(self):
-        super().__init__(timeout=None)
+        # Limit 15 minut (900 sekund) na kliknięcie w podsumowaniu
+        super().__init__(timeout=900.0)
         self.value = None
 
     @ui.button(label="Zatwierdź i Wyślij", style=discord.ButtonStyle.green)
@@ -134,10 +133,11 @@ async def zadaj_pytanie(kanal, uzytkownik, pytanie):
     def check(m):
         return m.author == uzytkownik and m.channel == kanal
     try:
-        msg = await bot.wait_for('message', check=check, timeout=300.0)
+        # Timeout ustawiony dokładnie na 15 minut (900 sekund)
+        msg = await bot.wait_for('message', check=check, timeout=900.0)
         return msg.content
     except asyncio.TimeoutError:
-        await kanal.send("⏳ Czas minął. Zamykam kanał.")
+        await kanal.send("⏳ **Minęło 15 minut braku aktywności.** Wniosek został anulowany, usuwam kanał...")
         await asyncio.sleep(3)
         await kanal.delete()
         raise Exception("Timeout")
@@ -267,7 +267,7 @@ class WidokPodpisu(ui.View):
 async def proces_rejestracji_klubu(interaction):
     kanal = await utworz_kanal_ticket(interaction, "rejestracja")
     try:
-        await kanal.send(f"Witaj {interaction.user.mention}! Rozpoczynamy rejestrację klubu.")
+        await kanal.send(f"Witaj {interaction.user.mention}! Rozpoczynamy rejestrację klubu.\n*Masz 15 minut na każdą odpowiedź.*")
         nazwa = await zadaj_pytanie(kanal, interaction.user, "Podaj pełną nazwę drużyny (np. FC Łazy):")
         
         while True:
@@ -293,6 +293,12 @@ async def proces_rejestracji_klubu(interaction):
         await kanal.send(embed=embed, view=view)
         await view.wait()
         
+        if view.value is None:
+            await kanal.send("⏳ **Minęło 15 minut bez potwierdzenia.** Zamykam kanał...")
+            await asyncio.sleep(3)
+            await kanal.delete()
+            return
+        
         if view.value:
             forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
             v_forum = WidokZatwierdzeniaKlubu(nazwa, skrot, zalozyciel, interaction.user.id)
@@ -308,6 +314,7 @@ async def proces_podpisania(interaction):
     kanal = await utworz_kanal_ticket(interaction, "kontrakt")
     try:
         db = load_db()
+        await kanal.send(f"*Masz 15 minut na każdą odpowiedź.*")
         while True:
             kup = await zadaj_pytanie(kanal, interaction.user, "Podaj skrót TWOJEGO KLUBU (kupującego):")
             kup = clean_tag(kup)
@@ -335,6 +342,12 @@ async def proces_podpisania(interaction):
         await kanal.send(embed=embed, view=view)
         await view.wait()
         
+        if view.value is None:
+            await kanal.send("⏳ **Minęło 15 minut bez potwierdzenia.** Zamykam kanał...")
+            await asyncio.sleep(3)
+            await kanal.delete()
+            return
+        
         if view.value:
             forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
             v_forum = WidokPodpisu(gracz, kup, None, "0", klauz, False, "BEZ_KLUBU", wazny_do)
@@ -348,6 +361,7 @@ async def proces_transferu(interaction):
     kanal = await utworz_kanal_ticket(interaction, "transfer")
     try:
         db = load_db()
+        await kanal.send(f"*Masz 15 minut na każdą odpowiedź.*")
         while True:
             kup = clean_tag(await zadaj_pytanie(kanal, interaction.user, "Skrót TWOJEGO KLUBU (Kupujący):"))
             if not has_club_board_role(interaction.user, kup, db): await kanal.send("❌ Odmowa dostępu!")
@@ -389,6 +403,12 @@ async def proces_transferu(interaction):
         await kanal.send(embed=embed, view=view)
         await view.wait()
         
+        if view.value is None:
+            await kanal.send("⏳ **Minęło 15 minut bez potwierdzenia.** Zamykam kanał...")
+            await asyncio.sleep(3)
+            await kanal.delete()
+            return
+        
         if view.value:
             forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
             v_forum = WidokPodpisu(gracz, kup, sprzed, kwota, klauz, wym_sprzed, "TRANSFER", wazny_do)
@@ -402,6 +422,7 @@ async def proces_wypozyczenia(interaction):
     kanal = await utworz_kanal_ticket(interaction, "wypozyczenie")
     try:
         db = load_db()
+        await kanal.send(f"*Masz 15 minut na każdą odpowiedź.*")
         while True:
             kup = clean_tag(await zadaj_pytanie(kanal, interaction.user, "Skrót KLUBU PRZYJMUJĄCEGO (Twój):"))
             if not has_club_board_role(interaction.user, kup, db): await kanal.send("❌ Odmowa dostępu!")
@@ -432,6 +453,12 @@ async def proces_wypozyczenia(interaction):
         view = WniosekConfirmView()
         await kanal.send(embed=embed, view=view)
         await view.wait()
+        
+        if view.value is None:
+            await kanal.send("⏳ **Minęło 15 minut bez potwierdzenia.** Zamykam kanał...")
+            await asyncio.sleep(3)
+            await kanal.delete()
+            return
         
         if view.value:
             forum = interaction.guild.get_channel(CHANNEL_FORUM_ID)
@@ -473,7 +500,6 @@ async def check_expirations():
             member = guild.get_member(dc_id) if dc_id else None
 
             if typ == "WYPOZYCZENIE":
-                # Koniec wypożyczenia -> powrót do klubu macierzystego
                 if member:
                     if klub_obecny in db["kluby"]:
                         r_temp = guild.get_role(db["kluby"][klub_obecny].get("rola_zawodnik", 0))
@@ -496,7 +522,6 @@ async def check_expirations():
                     )
 
             else:
-                # Wygasł kontrakt stały -> gracz traci klub
                 if member and klub_obecny in db["kluby"]:
                     r_zaw = guild.get_role(db["kluby"][klub_obecny].get("rola_zawodnik", 0))
                     if r_zaw: await member.remove_roles(r_zaw)
