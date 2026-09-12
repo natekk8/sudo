@@ -2,8 +2,9 @@ import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import discord
-from config import ROLE_FEDERACJA_ID
+from config import ROLE_FEDERACJA_ID, CHANNEL_KOMUNIKATY_ID
 import database
+
 
 try:
     from zoneinfo import ZoneInfo
@@ -34,7 +35,14 @@ def safe_thread_name(name: str) -> str:
 
 def is_federation(member: discord.Member) -> bool:
     if not member or not hasattr(member, "roles"): return False
-    return any(r.id == ROLE_FEDERACJA_ID for r in member.roles)
+    # Dynamiczny ID roli (DB → env fallback)
+    try:
+        import utils.league_config as lc
+        role_id = lc.role_federacja_id() or ROLE_FEDERACJA_ID
+    except Exception:
+        role_id = ROLE_FEDERACJA_ID
+    return any(r.id == role_id for r in member.roles)
+
 
 def is_club_board_or_owner(member: discord.Member, club_tag: str) -> bool:
     if not member or not club_tag: return False
@@ -173,16 +181,22 @@ def build_squad_bar(count: int, max_count: int) -> str:
 
 async def get_komunikaty_channel(client: discord.Client, guild: discord.Guild = None) -> discord.TextChannel | None:
     if not client: return None
-    from config import CHANNEL_KOMUNIKATY_ID
-    channel = client.get_channel(CHANNEL_KOMUNIKATY_ID)
+    # Dynamiczny ID kanału (DB → env fallback)
+    try:
+        import utils.league_config as lc
+        chan_id = lc.channel_komunikaty_id() or CHANNEL_KOMUNIKATY_ID
+    except Exception:
+        chan_id = CHANNEL_KOMUNIKATY_ID
+    channel = client.get_channel(chan_id)
     if not channel and guild:
-        channel = guild.get_channel(CHANNEL_KOMUNIKATY_ID)
+        channel = guild.get_channel(chan_id)
     if not channel:
         try:
-            channel = await client.fetch_channel(CHANNEL_KOMUNIKATY_ID)
+            channel = await client.fetch_channel(chan_id)
         except Exception as e:
-            print(f"[Komunikaty] Nie można pobrać kanału {CHANNEL_KOMUNIKATY_ID}: {e}")
+            print(f"[Komunikaty] Nie można pobrać kanału {chan_id}: {e}")
     return channel
+
 
 async def ping_representatives(thread: discord.Thread, target_tag: str, source_tag: str = None):
     ids = []

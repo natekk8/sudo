@@ -79,14 +79,11 @@ class AdminCog(commands.Cog):
         embed.set_footer(text=f"Liga Federacji • {datetime.now().strftime('%d.%m.%Y %H:%M')}")
         await ctx.reply(embed=embed)
 
-    @app_commands.command(name='reset', description='Zresetuj ligę na nowy sezon 2026/27')
-    async def slash_reset(self, interaction: discord.Interaction):
-        await self.slash_reset_sezon(interaction)
-
-    @app_commands.command(name='reset_sezon', description='Zresetuj bazę danych i liczniki ligi na nowy sezon 2026/27')
-    async def slash_reset_sezon(self, interaction: discord.Interaction):
+    async def _do_reset_sezon(self, interaction: discord.Interaction):
+        """Wspólna logika resetu sezonu — wywoływana przez /reset i /reset_sezon."""
         if not (interaction.user.guild_permissions.administrator or is_federation(interaction.user)):
-            return await interaction.response.send_message("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.", ephemeral=True)
+            return await interaction.response.send_message(
+                "❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.", ephemeral=True)
 
         database.reset_database_for_new_season()
         embed = discord.Embed(
@@ -104,5 +101,14 @@ class AdminCog(commands.Cog):
         embed.set_footer(text=f"Liga Federacji • {datetime.now().strftime('%d.%m.%Y %H:%M')}")
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name='reset', description='Zresetuj ligę na nowy sezon 2026/27')
+    async def slash_reset(self, interaction: discord.Interaction):
+        await self._do_reset_sezon(interaction)
+
+    @app_commands.command(name='reset_sezon', description='Zresetuj bazę danych i liczniki ligi na nowy sezon 2026/27')
+    async def slash_reset_sezon(self, interaction: discord.Interaction):
+        await self._do_reset_sezon(interaction)
+
 async def setup(bot):
     await bot.add_cog(AdminCog(bot))
+

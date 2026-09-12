@@ -2,11 +2,13 @@ import discord
 from discord.ext import commands
 from config import DISCORD_TOKEN, GUILD_ID
 import database
+import utils.league_config as league_config
 from views.main_panel import WidokPaneluGlownego
 from views.market_panel import WidokRynkuTransferowego
 from views.application_view import ForumApplicationView
 from tasks.expirations import setup_expirations_task
 from utils.helpers import is_federation
+
 
 # Inicjalizacja bazy danych SQLite
 database.init_db()
@@ -27,13 +29,14 @@ async def setup_panel(ctx):
     1️⃣ Biuro Federacji – oficjalne procesy ligowe
     2️⃣ Rynek Transferowy – giełda graczy i przegląd składów
     """
+    mx = league_config.max_players()
     embed1 = discord.Embed(
         title="🏛️ Biuro Federacji",
         description=(
             "Oficjalne procesy rejestracyjno-transferowe. Bot otworzy prywatny kanał ticketu, "
             "gdzie odpowiesz na pytania i możesz swobodnie oznaczać (@) użytkowników.\n\n"
             "**📝 Rejestracja Klubu** · Zakładanie nowej drużyny w lidze\n"
-            "**👤 Podpisanie Gracza** · Rejestracja wolnego agenta (limit: 3 graczy)\n"
+            f"**👤 Podpisanie Gracza** · Rejestracja wolnego agenta (limit: **{mx}** graczy)\n"
             "**🤝 Wniosek Transferowy** · Kupno zawodnika z innego klubu\n"
             "**⏱️ Wypożyczenie** · Czasowe przejście z automatycznym powrotem\n"
             "**📄 Aneks do Umowy** · Przedłużenie wygasającego kontraktu / zmiana klauzuli\n"
@@ -44,6 +47,7 @@ async def setup_panel(ctx):
     )
     embed1.set_footer(text="Liga Federacji • Biuro")
     await ctx.send(embed=embed1, view=WidokPaneluGlownego())
+
 
     embed2 = discord.Embed(
         title="📊 Rynek Transferowy",
@@ -81,7 +85,7 @@ async def on_ready():
             except Exception as e:
                 print(f"[on_ready] Błąd widoku #{app['id']}: {e}")
 
-    for cog in ['cogs.admin', 'cogs.market']:
+    for cog in ['cogs.admin', 'cogs.market', 'cogs.setup_cog']:
         try:
             await bot.load_extension(cog)
         except Exception as e:
