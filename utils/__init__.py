@@ -1,0 +1,1 @@
+# Moduł narzędzi pomocniczych
