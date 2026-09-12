@@ -225,14 +225,11 @@ class TestDatabase(unittest.TestCase):
         self.assertIn("TRANSFER", types)
         self.assertIn("WYGASNIECIE", types)
 
-    def test_free_agent_registration_with_profile(self):
-        database.register_free_agent(555, "Nowy Agent", position="NAP", platform="PS")
+    def test_free_agent_registration(self):
+        database.register_free_agent(555, "Nowy Agent")
         self.assertTrue(database.is_free_agent(555))
         agents = database.get_all_free_agents()
-        agent = next((a for a in agents if a["discord_id"] == 555), None)
-        self.assertIsNotNone(agent)
-        self.assertEqual(agent["position"], "NAP")
-        self.assertEqual(agent["platform"], "PS")
+        self.assertTrue(any(a["discord_id"] == 555 for a in agents))
 
     def test_free_agent_removal(self):
         database.register_free_agent(666, "Stary Agent")

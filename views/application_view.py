@@ -114,7 +114,6 @@ class ForumApplicationView(ui.View):
         self._build_buttons()
         embed = self._update_status_field(interaction.message.embeds[0], database.get_application(self.app_id))
         await interaction.response.edit_message(embed=embed, view=self)
-        await self._maybe_notify_federation_ready(interaction.client, interaction.guild, app)
         await interaction.followup.send("✅ Złożono podpis zawodnika.", ephemeral=True)
 
     async def cb_target_agree(self, interaction: discord.Interaction):
@@ -129,7 +128,6 @@ class ForumApplicationView(ui.View):
         self._build_buttons()
         embed = self._update_status_field(interaction.message.embeds[0], database.get_application(self.app_id))
         await interaction.response.edit_message(embed=embed, view=self)
-        await self._maybe_notify_federation_ready(interaction.client, interaction.guild, app)
         await interaction.followup.send("✅ Udzielono zgody klubu.", ephemeral=True)
 
     async def cb_source_agree(self, interaction: discord.Interaction):
@@ -144,7 +142,6 @@ class ForumApplicationView(ui.View):
         self._build_buttons()
         embed = self._update_status_field(interaction.message.embeds[0], database.get_application(self.app_id))
         await interaction.response.edit_message(embed=embed, view=self)
-        await self._maybe_notify_federation_ready(interaction.client, interaction.guild, app)
         await interaction.followup.send("✅ Udzielono zgody klubu oddającego/sprzedającego.", ephemeral=True)
 
     async def cb_party_reject(self, interaction: discord.Interaction):
@@ -625,35 +622,6 @@ class ForumApplicationView(ui.View):
                 return embed
         embed.add_field(name="Status", value=new_val, inline=False)
         return embed
-
-    async def _maybe_notify_federation_ready(self, client, guild, app):
-        """Powiadomienie do Federacji gdy wszystkie strony złożyły podpisy."""
-        # Odśwież app z bazy
-        fresh = database.get_application(self.app_id)
-        if not fresh or fresh.get("status") not in ("PENDING", "PROCESSING"):
-            return
-        p_ok = (fresh.get("player_agreed") or not fresh.get("needs_player_agree"))
-        t_ok = (fresh.get("target_club_agreed") or not fresh.get("needs_target_club_agree"))
-        s_ok = (fresh.get("source_club_agreed") or not fresh.get("needs_source_club_agree"))
-        if p_ok and t_ok and s_ok:
-            from config import ROLE_FEDERACJA_ID, CHANNEL_FORUM_ID
-            forum = guild.get_channel(CHANNEL_FORUM_ID) if guild else None
-            if forum:
-                thread_id = fresh.get("thread_id")
-                thread = guild.get_thread(thread_id) if thread_id else None
-                jump_url = thread.jump_url if thread else "brak"
-                try:
-                    fed_role = guild.get_role(ROLE_FEDERACJA_ID)
-                    msg = (
-                        f"🔔 **Wniosek #{self.app_id} skompletował wszystkie podpisy stron!**\n"
-                        f"> Typ: `{fresh.get('type')}` | Zawodnik: `{fresh.get('player_name', '?')}`\n"
-                        f"> Wymagana decyzja Federacji: {fed_role.mention if fed_role else '@Federacja'}\n"
-                        f"> 🔗 {jump_url}"
-                    )
-                    await forum.send(msg,
-                                     allowed_mentions=discord.AllowedMentions(roles=True, everyone=False))
-                except Exception as e:
-                    print(f"[ForumView] Błąd powiadomienia Federacji: {e}")
 
     async def _archive_thread(self, channel):
         if isinstance(channel, discord.Thread):

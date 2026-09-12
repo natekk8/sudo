@@ -415,16 +415,15 @@ def get_player_transfer_history(player_name: str, player_discord_id: int = None)
         return [dict(r) for r in cursor.fetchall()]
 
 # ==================== WOLNI AGENCI (GIEŁDA) ====================
-def register_free_agent(discord_id: int, player_name: str,
-                         position: str = "UNI", platform: str = "ALL"):
+def register_free_agent(discord_id: int, player_name: str):
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
             date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("""
-                INSERT OR REPLACE INTO free_agents (discord_id, player_name, position, platform, registered_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (discord_id, player_name, position, platform, date))
+                INSERT OR REPLACE INTO free_agents (discord_id, player_name, registered_at)
+                VALUES (?, ?, ?)
+            """, (discord_id, player_name, date))
             conn.commit()
 
 def remove_free_agent(discord_id: int):
