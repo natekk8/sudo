@@ -25,7 +25,6 @@ def init_db():
         with get_connection() as conn:
             cursor = conn.cursor()
 
-            # Tabela klubów
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS clubs (
                     tag TEXT PRIMARY KEY,
@@ -39,7 +38,6 @@ def init_db():
                 )
             """)
 
-            # Tabela zawodników (rozszerzona)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS players (
                     name TEXT PRIMARY KEY,
@@ -47,6 +45,7 @@ def init_db():
                     club_tag TEXT NOT NULL,
                     parent_club_tag TEXT,
                     clause TEXT,
+                    parent_clause TEXT,
                     contract_type TEXT,
                     expires_at TEXT,
                     parent_contract_expires_at TEXT,
@@ -56,7 +55,6 @@ def init_db():
                 )
             """)
 
-            # Tabela liczników
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS counters (
                     name TEXT PRIMARY KEY,
@@ -64,7 +62,6 @@ def init_db():
                 )
             """)
 
-            # Tabela wniosków (trwałość widoków po restarcie)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS applications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +71,7 @@ def init_db():
                     applicant_id INTEGER,
                     club_name TEXT,
                     club_tag TEXT,
+                    old_club_tag TEXT,
                     founder_txt TEXT,
                     board_txt TEXT,
                     player_name TEXT,
@@ -83,6 +81,8 @@ def init_db():
                     amount TEXT,
                     clause TEXT,
                     expires_at TEXT,
+                    is_buyout INTEGER DEFAULT 0,
+                    reason TEXT,
                     needs_player_agree INTEGER DEFAULT 0,
                     needs_target_club_agree INTEGER DEFAULT 0,
                     needs_source_club_agree INTEGER DEFAULT 0,
@@ -95,7 +95,6 @@ def init_db():
                 )
             """)
 
-            # Tabela historii transferów
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS transfer_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,38 +108,54 @@ def init_db():
                 )
             """)
 
-            # Tabela wolnych agentów (Giełda)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS free_agents (
                     discord_id INTEGER PRIMARY KEY,
                     player_name TEXT NOT NULL,
+                    position TEXT DEFAULT 'UNI',
+                    platform TEXT DEFAULT 'ALL',
                     registered_at TEXT NOT NULL
                 )
             """)
 
-            # Migracja – dodanie brakujących kolumn do istniejących tabel (gdy bot już działał)
             _migrate_columns(cursor)
-
             conn.commit()
 
     _import_legacy_json_if_needed()
 
 def _migrate_columns(cursor):
     """Bezpieczne dodanie brakujących kolumn do istniejących tabel."""
-    existing_cols = {row[1] for row in cursor.execute("PRAGMA table_info(players)")}
-    new_cols = {
+    def _cols(table):
+        return {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
+
+    players_cols = _cols("players")
+    for col, typ in {
+        "parent_clause": "TEXT",
         "parent_contract_expires_at": "TEXT",
         "warned_7d": "INTEGER DEFAULT 0",
         "warned_3d": "INTEGER DEFAULT 0",
         "warned_1d": "INTEGER DEFAULT 0",
-    }
-    for col, col_type in new_cols.items():
-        if col not in existing_cols:
-            cursor.execute(f"ALTER TABLE players ADD COLUMN {col} {col_type}")
+    }.items():
+        if col not in players_cols:
+            cursor.execute(f"ALTER TABLE players ADD COLUMN {col} {typ}")
 
-    existing_app_cols = {row[1] for row in cursor.execute("PRAGMA table_info(applications)")}
-    if "rejected_by" not in existing_app_cols:
-        cursor.execute("ALTER TABLE applications ADD COLUMN rejected_by TEXT")
+    app_cols = _cols("applications")
+    for col, typ in {
+        "rejected_by": "TEXT",
+        "is_buyout": "INTEGER DEFAULT 0",
+        "reason": "TEXT",
+        "old_club_tag": "TEXT",
+    }.items():
+        if col not in app_cols:
+            cursor.execute(f"ALTER TABLE applications ADD COLUMN {col} {typ}")
+
+    fa_cols = _cols("free_agents")
+    for col, typ in {
+        "position": "TEXT DEFAULT 'UNI'",
+        "platform": "TEXT DEFAULT 'ALL'",
+    }.items():
+        if col not in fa_cols:
+            cursor.execute(f"ALTER TABLE free_agents ADD COLUMN {col} {typ}")
 
 def _import_legacy_json_if_needed():
     if not os.path.exists(LEGACY_JSON_DB):
@@ -149,10 +164,7 @@ def _import_legacy_json_if_needed():
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM clubs")
-        club_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM players")
-        player_count = cursor.fetchone()[0]
-        if club_count > 0 or player_count > 0:
+        if cursor.fetchone()[0] > 0:
             return
 
         try:
@@ -162,34 +174,28 @@ def _import_legacy_json_if_needed():
             print(f"[DB] Błąd odczytu {LEGACY_JSON_DB}: {e}")
             return
 
-        print(f"[DB] Migracja danych z {LEGACY_JSON_DB} do SQLite...")
-        ticket_counter = data.get("ticket_counter", 0)
-        cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', ?)", (ticket_counter,))
+        print(f"[DB] Migracja z {LEGACY_JSON_DB}...")
+        cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', ?)",
+                       (data.get("ticket_counter", 0),))
 
-        for tag, cdata in data.get("kluby", {}).items():
-            rep_id = cdata.get("reprezentant_dc")
-            board_ids_json = json.dumps([rep_id] if rep_id else [])
+        for tag, cd in data.get("kluby", {}).items():
+            rep_id = cd.get("reprezentant_dc")
             cursor.execute("""
                 INSERT OR REPLACE INTO clubs (tag, name, role_board_id, role_player_id, reprezentant_dc, founder_txt, board_txt, board_ids)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                tag.upper(), cdata.get("nazwa", tag),
-                cdata.get("rola_zarzad", 0), cdata.get("rola_zawodnik", 0),
-                rep_id, "", "", board_ids_json
-            ))
+            """, (tag.upper(), cd.get("nazwa", tag), cd.get("rola_zarzad", 0),
+                  cd.get("rola_zawodnik", 0), rep_id, "", "", json.dumps([rep_id] if rep_id else [])))
 
-        for name, pdata in data.get("zawodnicy", {}).items():
+        for name, pd in data.get("zawodnicy", {}).items():
             cursor.execute("""
                 INSERT OR REPLACE INTO players (name, discord_id, club_tag, parent_club_tag, clause, contract_type, expires_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                name, pdata.get("gracz_dc_id"), pdata.get("klub"),
-                pdata.get("klub_macierzysty", pdata.get("klub")),
-                pdata.get("klauzula", "Brak"), pdata.get("typ", "TRANSFER"), pdata.get("wazny_do")
-            ))
+            """, (name, pd.get("gracz_dc_id"), pd.get("klub"),
+                  pd.get("klub_macierzysty", pd.get("klub")),
+                  pd.get("klauzula", "Brak"), pd.get("typ", "TRANSFER"), pd.get("wazny_do")))
 
         conn.commit()
-        print("[DB] Migracja zakończona pomyślnie!")
+        print("[DB] Migracja zakończona.")
 
 # ==================== LICZNIKI ====================
 def get_next_ticket_id() -> str:
@@ -198,12 +204,8 @@ def get_next_ticket_id() -> str:
             cursor = conn.cursor()
             cursor.execute("SELECT value FROM counters WHERE name = 'ticket_counter'")
             row = cursor.fetchone()
-            if row:
-                count = row[0] + 1
-                cursor.execute("UPDATE counters SET value = ? WHERE name = 'ticket_counter'", (count,))
-            else:
-                count = 1
-                cursor.execute("INSERT INTO counters (name, value) VALUES ('ticket_counter', 1)")
+            count = (row[0] + 1) if row else 1
+            cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', ?)", (count,))
             conn.commit()
             return f"{count:03d}"
 
@@ -218,10 +220,8 @@ def add_club(tag: str, name: str, role_board_id: int, role_player_id: int,
             cursor.execute("""
                 INSERT OR REPLACE INTO clubs (tag, name, role_board_id, role_player_id, reprezentant_dc, founder_txt, board_txt, board_ids)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                tag.strip().upper(), name.strip(), role_board_id, role_player_id,
-                reprezentant_dc, founder_txt, board_txt, json.dumps(board_ids)
-            ))
+            """, (tag.strip().upper(), name.strip(), role_board_id, role_player_id,
+                  reprezentant_dc, founder_txt, board_txt, json.dumps(board_ids)))
             conn.commit()
 
 def get_club(tag: str):
@@ -252,6 +252,23 @@ def get_all_clubs() -> list:
             result.append(d)
         return result
 
+def rebrand_club(old_tag: str, new_tag: str, new_name: str):
+    """Kaskadowy rebranding: zmienia tag i nazwę klubu oraz aktualizuje wszystkich graczy."""
+    old_tag = old_tag.strip().upper()
+    new_tag = new_tag.strip().upper()
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            # Aktualizuj rekord klubu
+            cursor.execute("UPDATE clubs SET tag = ?, name = ? WHERE tag = ?", (new_tag, new_name, old_tag))
+            # Kaskada na graczy
+            cursor.execute("UPDATE players SET club_tag = ? WHERE club_tag = ?", (new_tag, old_tag))
+            cursor.execute("UPDATE players SET parent_club_tag = ? WHERE parent_club_tag = ?", (new_tag, old_tag))
+            # Kaskada na historię transferów
+            cursor.execute("UPDATE transfer_history SET from_club = ? WHERE from_club = ?", (new_tag, old_tag))
+            cursor.execute("UPDATE transfer_history SET to_club = ? WHERE to_club = ?", (new_tag, old_tag))
+            conn.commit()
+
 # ==================== ZAWODNICY ====================
 def get_club_player_count(club_tag: str) -> int:
     if not club_tag: return 0
@@ -269,35 +286,55 @@ def get_club_players(club_tag: str) -> list:
 
 def add_or_update_player(name: str, discord_id: int, club_tag: str, parent_club_tag: str,
                           clause: str, contract_type: str, expires_at: str,
-                          parent_contract_expires_at: str = None):
+                          parent_contract_expires_at: str = None, parent_clause: str = None):
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
-            # Zachowaj istniejące flagi ostrzeżeń jeśli zmieniamy tylko kontrakt
-            cursor.execute("SELECT warned_7d, warned_3d, warned_1d FROM players WHERE name = ?", (name,))
+            # Sprawdź czy zmieniamy datę (reset flag ostrzeżeń)
+            cursor.execute("SELECT expires_at, clause FROM players WHERE name = ?", (name,))
             old = cursor.fetchone()
-            warned_7d = old["warned_7d"] if old else 0
-            warned_3d = old["warned_3d"] if old else 0
-            warned_1d = old["warned_1d"] if old else 0
-            # Reset flag jeśli termin wygasania się zmienił
-            cursor.execute("SELECT expires_at FROM players WHERE name = ?", (name,))
-            old_exp = cursor.fetchone()
-            if not old_exp or old_exp["expires_at"] != expires_at:
-                warned_7d = warned_3d = warned_1d = 0
+            warned_7d = warned_3d = warned_1d = 0
+            if old and old["expires_at"] == expires_at:
+                # Data się nie zmieniła – zachowaj flagi
+                cursor.execute("SELECT warned_7d, warned_3d, warned_1d FROM players WHERE name = ?", (name,))
+                flags = cursor.fetchone()
+                if flags:
+                    warned_7d, warned_3d, warned_1d = flags["warned_7d"], flags["warned_3d"], flags["warned_1d"]
+
 
             cursor.execute("""
                 INSERT OR REPLACE INTO players
-                    (name, discord_id, club_tag, parent_club_tag, clause, contract_type,
-                     expires_at, parent_contract_expires_at, warned_7d, warned_3d, warned_1d)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (name, discord_id, club_tag, parent_club_tag, clause, parent_clause,
+                     contract_type, expires_at, parent_contract_expires_at,
+                     warned_7d, warned_3d, warned_1d)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 name, discord_id,
                 club_tag.strip().upper() if club_tag else None,
                 parent_club_tag.strip().upper() if parent_club_tag else None,
-                clause, contract_type, expires_at,
-                parent_contract_expires_at,
-                warned_7d, warned_3d, warned_1d
+                clause, parent_clause, contract_type, expires_at,
+                parent_contract_expires_at, warned_7d, warned_3d, warned_1d
             ))
+            conn.commit()
+
+def extend_player_contract(name: str, expires_at: str, clause: str):
+    """Aktualizacja kontraktu z resetem flag ostrzeżeń (Aneks)."""
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE players SET expires_at = ?, clause = ?,
+                    warned_7d = 0, warned_3d = 0, warned_1d = 0
+                WHERE name = ?
+            """, (expires_at, clause, name))
+            conn.commit()
+
+def terminate_player_contract(name: str):
+    """Usuwa gracza z bazy – rozwiązanie kontraktu."""
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM players WHERE name = ?", (name,))
             conn.commit()
 
 def get_player(name: str):
@@ -316,16 +353,14 @@ def get_player_by_discord_id(discord_id: int):
         row = cursor.fetchone()
         return dict(row) if row else None
 
-def is_player_under_contract(player_name: str, player_discord_id: int = None) -> dict | None:
-    """Zwraca rekord gracza jeśli ma aktywny kontrakt, None jeśli nie."""
+def is_player_under_contract(player_name: str, player_discord_id: int = None):
+    """Zwraca rekord gracza jeśli ma aktywny kontrakt, None w przeciwnym razie."""
     if player_discord_id:
         p = get_player_by_discord_id(player_discord_id)
-        if p:
-            return p
+        if p: return p
     if player_name:
         p = get_player(player_name)
-        if p:
-            return p
+        if p: return p
     return None
 
 def delete_player(name: str):
@@ -342,7 +377,6 @@ def get_all_players() -> list:
         return [dict(r) for r in cursor.fetchall()]
 
 def set_player_warning_flag(name: str, flag: str):
-    """flag: 'warned_7d', 'warned_3d', 'warned_1d'"""
     allowed = {"warned_7d", "warned_3d", "warned_1d"}
     if flag not in allowed: return
     with _lock:
@@ -381,23 +415,35 @@ def get_player_transfer_history(player_name: str, player_discord_id: int = None)
         return [dict(r) for r in cursor.fetchall()]
 
 # ==================== WOLNI AGENCI (GIEŁDA) ====================
-def register_free_agent(discord_id: int, player_name: str):
+def register_free_agent(discord_id: int, player_name: str,
+                         position: str = "UNI", platform: str = "ALL"):
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
             date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("""
-                INSERT OR REPLACE INTO free_agents (discord_id, player_name, registered_at)
-                VALUES (?, ?, ?)
-            """, (discord_id, player_name, date))
+                INSERT OR REPLACE INTO free_agents (discord_id, player_name, position, platform, registered_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (discord_id, player_name, position, platform, date))
             conn.commit()
 
 def remove_free_agent(discord_id: int):
+    if not discord_id: return
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM free_agents WHERE discord_id = ?", (discord_id,))
             conn.commit()
+
+def get_free_agents_paginated(limit: int = 25) -> tuple:
+    """Zwraca (lista_agentów, total_count). Bezpieczne wobec limitu 4096 znaków."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM free_agents")
+        total = cursor.fetchone()[0]
+        cursor.execute("SELECT * FROM free_agents ORDER BY registered_at DESC LIMIT ?", (limit,))
+        agents = [dict(r) for r in cursor.fetchall()]
+        return agents, total
 
 def get_all_free_agents() -> list:
     with get_connection() as conn:
@@ -411,14 +457,38 @@ def is_free_agent(discord_id: int) -> bool:
         cursor.execute("SELECT 1 FROM free_agents WHERE discord_id = ?", (discord_id,))
         return cursor.fetchone() is not None
 
+def cleanup_expired_free_agents(days: int = 14):
+    """Usuwa z giełdy ogłoszenia starsze niż `days` dni."""
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT discord_id, player_name FROM free_agents "
+                "WHERE registered_at < datetime('now', ?)",
+                (f"-{days} days",)
+            )
+            expired = [dict(r) for r in cursor.fetchall()]
+            cursor.execute(
+                "DELETE FROM free_agents WHERE registered_at < datetime('now', ?)",
+                (f"-{days} days",)
+            )
+            conn.commit()
+            return expired  # Lista usuniętych, do wysyłania DM
+
+def backup_database_vacuum(target_path: str):
+    """Wykonuje VACUUM INTO – atomowy zapis spójnej kopii bazy SQLite (WAL-safe)."""
+    with get_connection() as conn:
+        conn.execute(f"VACUUM INTO ?", (target_path,))
+
 # ==================== WNIOSKI (APPLICATIONS) ====================
 def create_application(
     app_type: str, applicant_id: int,
-    club_name: str = None, club_tag: str = None,
+    club_name: str = None, club_tag: str = None, old_club_tag: str = None,
     founder_txt: str = None, board_txt: str = None,
     player_name: str = None, player_discord_id: int = None,
     target_club: str = None, source_club: str = None,
     amount: str = None, clause: str = None, expires_at: str = None,
+    is_buyout: bool = False, reason: str = None,
     needs_player_agree: bool = False,
     needs_target_club_agree: bool = False,
     needs_source_club_agree: bool = False
@@ -429,16 +499,19 @@ def create_application(
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO applications (
-                    type, applicant_id, club_name, club_tag, founder_txt, board_txt,
-                    player_name, player_discord_id, target_club, source_club, amount,
-                    clause, expires_at, needs_player_agree, needs_target_club_agree,
-                    needs_source_club_agree, player_agreed, target_club_agreed,
-                    source_club_agreed, status, rejected_by, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'PENDING', NULL, ?)
+                    type, applicant_id, club_name, club_tag, old_club_tag,
+                    founder_txt, board_txt, player_name, player_discord_id,
+                    target_club, source_club, amount, clause, expires_at,
+                    is_buyout, reason,
+                    needs_player_agree, needs_target_club_agree, needs_source_club_agree,
+                    player_agreed, target_club_agreed, source_club_agreed,
+                    status, rejected_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 'PENDING', NULL, ?)
             """, (
-                app_type, applicant_id, club_name, club_tag, founder_txt, board_txt,
-                player_name, player_discord_id, target_club, source_club, amount,
-                clause, expires_at,
+                app_type, applicant_id, club_name, club_tag, old_club_tag,
+                founder_txt, board_txt, player_name, player_discord_id,
+                target_club, source_club, amount, clause, expires_at,
+                1 if is_buyout else 0, reason,
                 1 if needs_player_agree else 0,
                 1 if needs_target_club_agree else 0,
                 1 if needs_source_club_agree else 0,
@@ -447,6 +520,39 @@ def create_application(
             app_id = cursor.lastrowid
             conn.commit()
             return app_id
+
+def try_claim_application_for_approval(app_id: int):
+    """
+    Atomowy CAS: zmienia status PENDING → PROCESSING.
+    Zwraca dict wniosku jeśli się powiodło, None jeśli wniosek był już przetwarzany.
+    Chroni przed TOCTOU przy podwójnym kliknięciu przez Federację.
+    """
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM applications WHERE id = ?", (app_id,))
+            row = cursor.fetchone()
+            if not row or row["status"] != "PENDING":
+                return None
+            cursor.execute(
+                "UPDATE applications SET status = 'PROCESSING' WHERE id = ? AND status = 'PENDING'",
+                (app_id,)
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                return None
+            return dict(row)
+
+def revert_application_status(app_id: int, old_status: str = "PENDING"):
+    """Rollback statusu PROCESSING → PENDING po błędzie krytycznym Discord API."""
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE applications SET status = ? WHERE id = ? AND status = 'PROCESSING'",
+                (old_status, app_id)
+            )
+            conn.commit()
 
 def set_application_message(app_id: int, thread_id: int, message_id: int):
     with _lock:
@@ -466,7 +572,19 @@ def get_application(app_id: int):
 def get_pending_applications() -> list:
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM applications WHERE status = 'PENDING' AND message_id IS NOT NULL")
+        cursor.execute(
+            "SELECT * FROM applications WHERE status IN ('PENDING', 'PROCESSING') AND message_id IS NOT NULL"
+        )
+        return [dict(r) for r in cursor.fetchall()]
+
+def get_stale_pending_applications(hours: int = 48) -> list:
+    """Wniosek bez decyzji po X godzinach."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM applications WHERE status = 'PENDING'
+            AND created_at < datetime('now', ?)
+        """, (f"-{hours} hours",))
         return [dict(r) for r in cursor.fetchall()]
 
 def set_application_agreement(app_id: int, agree_type: str, value: bool = True):
@@ -493,3 +611,48 @@ def set_application_status(app_id: int, status: str, rejected_by: str = None):
                 (status, rejected_by, app_id)
             )
             conn.commit()
+
+# ==================== STATYSTYKI ====================
+def get_league_stats() -> dict:
+    """Dane statystyczne ligi do komendy !liga_status."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM clubs")
+        club_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM players")
+        player_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM free_agents")
+        fa_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM applications WHERE status = 'PENDING'")
+        pending_count = cursor.fetchone()[0]
+        return {
+            "clubs": club_count,
+            "players": player_count,
+            "free_agents": fa_count,
+            "pending_applications": pending_count
+        }
+
+def get_db_file_stats() -> dict:
+    """Rozmiar pliku bazy danych i liczba wierszy per tabela."""
+    stats = {}
+    try:
+        size = os.path.getsize(DB_PATH)
+        stats["file_size_kb"] = round(size / 1024, 1)
+    except FileNotFoundError:
+        stats["file_size_kb"] = 0
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        for table in ["clubs", "players", "applications", "transfer_history", "free_agents", "counters"]:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                stats[table] = cursor.fetchone()[0]
+            except Exception:
+                stats[table] = "?"
+
+        cursor.execute("PRAGMA journal_mode")
+        stats["journal_mode"] = cursor.fetchone()[0]
+        cursor.execute("PRAGMA foreign_keys")
+        stats["foreign_keys"] = "ON" if cursor.fetchone()[0] else "OFF"
+
+    return stats

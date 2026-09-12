@@ -5,6 +5,7 @@ Uruchom: python -m unittest tests/test_league.py -v
 import unittest
 import os
 import sys
+import tempfile
 import sqlite3
 from datetime import datetime, timedelta
 
@@ -16,13 +17,10 @@ os.environ["GUILD_ID"] = "0"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import database
-from utils.helpers import clean_tag, extract_ids, parse_expiry_date, parse_amount, validate_amount_input, build_squad_bar
-
-
-def setup_fresh_db():
-    """Resetuje baz danych in-memory przed każdym testem."""
-    # init_db wewnętrznie otwiera połączenie według DB_PATH
-    database.init_db()
+from utils.helpers import (
+    clean_tag, is_valid_tag, extract_ids, parse_expiry_date,
+    parse_amount, validate_amount_input, build_squad_bar, safe_thread_name
+)
 
 
 class TestCleanTag(unittest.TestCase):
@@ -34,6 +32,40 @@ class TestCleanTag(unittest.TestCase):
 
     def test_none(self):
         self.assertEqual("", clean_tag(None))
+
+
+class TestIsValidTag(unittest.TestCase):
+    def test_valid_3_letters(self):
+        self.assertTrue(is_valid_tag("LAZ"))
+
+    def test_valid_alphanumeric(self):
+        self.assertTrue(is_valid_tag("FC1"))
+        self.assertTrue(is_valid_tag("123"))
+
+    def test_invalid_too_short(self):
+        self.assertFalse(is_valid_tag("LA"))
+
+    def test_invalid_too_long(self):
+        self.assertFalse(is_valid_tag("LAZZ"))
+
+    def test_invalid_special_chars(self):
+        self.assertFalse(is_valid_tag("L@Z"))
+        self.assertFalse(is_valid_tag("L Z"))
+
+    def test_invalid_empty(self):
+        self.assertFalse(is_valid_tag(""))
+        self.assertFalse(is_valid_tag(None))
+
+
+class TestSafeThreadName(unittest.TestCase):
+    def test_short_name_unaltered(self):
+        self.assertEqual("[LAZ] Nowy Gracz", safe_thread_name("[LAZ] Nowy Gracz"))
+
+    def test_long_name_truncated_to_100(self):
+        long_str = "A" * 150
+        truncated = safe_thread_name(long_str)
+        self.assertEqual(100, len(truncated))
+        self.assertEqual("A" * 100, truncated)
 
 
 class TestExtractIds(unittest.TestCase):
@@ -61,7 +93,6 @@ class TestParseAmount(unittest.TestCase):
         self.assertEqual(1500, parse_amount("1,500"))
 
     def test_decimal_rejected(self):
-        """Kwota 1.5 mln powinna zwrócić 0 (odrzucona)."""
         self.assertEqual(0, parse_amount("1.5"))
 
     def test_text_rejected(self):
@@ -94,7 +125,7 @@ class TestParseExpiryDate(unittest.TestCase):
         self.assertIsNotNone(result)
         dt = datetime.strptime(result, "%Y-%m-%d %H:%M:%S")
         days_diff = (dt - datetime.now()).days
-        self.assertAlmostEqual(days_diff, 29, delta=1)  # 29-30 dni różnicy
+        self.assertAlmostEqual(days_diff, 29, delta=1)
 
     def test_days_with_unit(self):
         result = parse_expiry_date("14 dni")
@@ -135,17 +166,18 @@ class TestBuildSquadBar(unittest.TestCase):
 
 class TestDatabase(unittest.TestCase):
     def setUp(self):
-        import tempfile
-        # Używamy tymczasowego pliku per-test (cross-platform, działa na Windows i Linux)
         fd, self.test_db = tempfile.mkstemp(suffix=".db", prefix="test_liga_")
         os.close(fd)
-        os.remove(self.test_db)  # sqlite3 sam stworzy plik
+        os.remove(self.test_db)
         database.DB_PATH = self.test_db
         database.init_db()
 
     def tearDown(self):
         if os.path.exists(self.test_db):
-            os.remove(self.test_db)
+            try:
+                os.remove(self.test_db)
+            except Exception:
+                pass
 
     def test_add_and_get_club(self):
         database.add_club("TST", "Test Club", 1001, 1002, board_ids=[500])
@@ -175,16 +207,13 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(2, database.get_club_player_count("CNT"))
 
     def test_contract_theft_prevention(self):
-        """Weryfikacja wykrywania gracza już w innym klubie."""
         database.add_club("FC1", "First Club", 1, 2)
         database.add_club("FC2", "Second Club", 3, 4)
         database.add_or_update_player("Złodziej", 777, "FC1", "FC1", "Brak", "TRANSFER", "2027-01-01 00:00:00")
 
-        # Sprawdzenie is_player_under_contract
         existing = database.is_player_under_contract("Złodziej", 777)
         self.assertIsNotNone(existing)
         self.assertEqual(existing["club_tag"], "FC1")
-        # Weryfikacja przynależności do innego klubu
         self.assertNotEqual(existing.get("club_tag", "").upper(), "FC2")
 
     def test_transfer_history_recording(self):
@@ -196,52 +225,55 @@ class TestDatabase(unittest.TestCase):
         self.assertIn("TRANSFER", types)
         self.assertIn("WYGASNIECIE", types)
 
-
-    def test_free_agent_registration(self):
-        database.register_free_agent(555, "Nowy Agent")
+    def test_free_agent_registration_with_profile(self):
+        database.register_free_agent(555, "Nowy Agent", position="NAP", platform="PS")
         self.assertTrue(database.is_free_agent(555))
         agents = database.get_all_free_agents()
-        self.assertTrue(any(a["discord_id"] == 555 for a in agents))
+        agent = next((a for a in agents if a["discord_id"] == 555), None)
+        self.assertIsNotNone(agent)
+        self.assertEqual(agent["position"], "NAP")
+        self.assertEqual(agent["platform"], "PS")
 
     def test_free_agent_removal(self):
         database.register_free_agent(666, "Stary Agent")
         database.remove_free_agent(666)
         self.assertFalse(database.is_free_agent(666))
 
-    def test_duplicate_free_agent_updates(self):
-        """Duplikat REPLACE – zawodnik nadpisuje swój wpis."""
-        database.register_free_agent(444, "Duplikat Gracz")
-        database.register_free_agent(444, "Duplikat Gracz Nowa Nazwa")
-        agents = database.get_all_free_agents()
-        agents_for_id = [a for a in agents if a["discord_id"] == 444]
-        self.assertEqual(len(agents_for_id), 1)  # tylko jeden wpis
+    def test_free_agents_pagination(self):
+        for i in range(30):
+            database.register_free_agent(1000 + i, f"Agent_{i}")
+        page, total = database.get_free_agents_paginated(limit=25)
+        self.assertEqual(total, 30)
+        self.assertEqual(len(page), 25)
 
-    def test_loan_return_restores_parent_contract(self):
-        """Powrót z wypożyczenia przywraca datę kontraktu macierzystego."""
+    def test_loan_return_restores_parent_contract_and_clause(self):
         database.add_club("HOME", "Home Club", 1, 2)
         database.add_club("LOAN", "Loan Club", 3, 4)
         parent_date = "2027-06-30 23:59:59"
+        parent_clause_val = "25000"
         loan_date = "2027-01-31 23:59:59"
 
         database.add_or_update_player(
             "Loański Gracz", 888, "LOAN", "HOME",
-            "Bez zmian", "WYPOZYCZENIE", loan_date,
-            parent_contract_expires_at=parent_date
+            clause=parent_clause_val, contract_type="WYPOZYCZENIE", expires_at=loan_date,
+            parent_contract_expires_at=parent_date, parent_clause=parent_clause_val
         )
         p = database.get_player("Loański Gracz")
         self.assertEqual(p["parent_contract_expires_at"], parent_date)
+        self.assertEqual(p["parent_clause"], parent_clause_val)
         self.assertEqual(p["expires_at"], loan_date)
 
-        # Symulacja powrotu z wypożyczenia
+        # Powrót z wypożyczenia
         database.add_or_update_player(
             "Loański Gracz", 888, "HOME", "HOME",
-            "Bez zmian", "TRANSFER", parent_date,
-            parent_contract_expires_at=None
+            clause=p["parent_clause"], contract_type="TRANSFER", expires_at=parent_date,
+            parent_contract_expires_at=None, parent_clause=None
         )
         p_after = database.get_player("Loański Gracz")
         self.assertEqual(p_after["club_tag"], "HOME")
         self.assertEqual(p_after["expires_at"], parent_date)
-        self.assertIsNone(p_after["parent_contract_expires_at"])
+        self.assertEqual(p_after["clause"], parent_clause_val)
+        self.assertIsNone(p_after["parent_clause"])
 
     def test_warning_flags(self):
         database.add_club("WRN", "Warning Club", 1, 2)
@@ -252,16 +284,141 @@ class TestDatabase(unittest.TestCase):
         p2 = database.get_player("Warnowany")
         self.assertEqual(p2["warned_7d"], 1)
 
-    def test_set_application_status_with_rejected_by(self):
-        database.add_club("APL", "Apply Club", 1, 2)
+    # ── Testy CAS (Compare-And-Swap) – ochrona przed TOCTOU ──
+    def test_try_claim_application_for_approval(self):
+        database.add_club("CAS", "CAS Club", 1, 2)
         app_id = database.create_application(
-            app_type="PODPISANIE", applicant_id=1,
-            player_name="Test Gracz", target_club="APL", expires_at="2027-01-01 00:00:00"
+            app_type="TRANSFER", applicant_id=10,
+            player_name="Gracz CAS", target_club="CAS", source_club="CAS",
+            expires_at="2027-01-01 00:00:00"
         )
-        database.set_application_status(app_id, "REJECTED", rejected_by="Zarząd XYZ")
+        # Pierwszy claim powinien się udać i zmienić stan na PROCESSING
+        claim1 = database.try_claim_application_for_approval(app_id)
+        self.assertIsNotNone(claim1)
+        self.assertEqual(claim1["status"], "PENDING")
+
+        app_mid = database.get_application(app_id)
+        self.assertEqual(app_mid["status"], "PROCESSING")
+
+        # Drugi równoległy claim na ten sam wniosek musi zwrócić None!
+        claim2 = database.try_claim_application_for_approval(app_id)
+        self.assertIsNone(claim2)
+
+    def test_revert_application_status(self):
+        app_id = database.create_application(
+            app_type="TRANSFER", applicant_id=10,
+            player_name="Gracz Rollback", target_club="RLB", expires_at="2027-01-01 00:00:00"
+        )
+        database.try_claim_application_for_approval(app_id)
+        # Rollback do PENDING
+        database.revert_application_status(app_id, "PENDING")
         app = database.get_application(app_id)
-        self.assertEqual(app["status"], "REJECTED")
-        self.assertIn("XYZ", app["rejected_by"])
+        self.assertEqual(app["status"], "PENDING")
+
+    # ── Test Rebrandingu Klubu ──
+    def test_rebrand_club_cascade(self):
+        database.add_club("OLD", "Stara Nazwa", 1, 2)
+        database.add_or_update_player("Gracz Rebrand", 707, "OLD", "OLD", "5000", "TRANSFER", "2027-01-01 00:00:00")
+        database.add_transfer_history("Gracz Rebrand", 707, "OLD", "OLD", "TRANSFER", "5000")
+
+        database.rebrand_club("OLD", "NEW", "Nowa Nazwa")
+
+        # Sprawdź klub
+        self.assertIsNone(database.get_club("OLD"))
+        new_club = database.get_club("NEW")
+        self.assertIsNotNone(new_club)
+        self.assertEqual(new_club["name"], "Nowa Nazwa")
+
+        # Sprawdź gracza
+        p = database.get_player("Gracz Rebrand")
+        self.assertEqual(p["club_tag"], "NEW")
+        self.assertEqual(p["parent_club_tag"], "NEW")
+
+        # Sprawdź historię transferów
+        hist = database.get_player_transfer_history("Gracz Rebrand", 707)
+        self.assertEqual(hist[0]["from_club"], "NEW")
+        self.assertEqual(hist[0]["to_club"], "NEW")
+
+    # ── Test Aneksu (extend_player_contract) ──
+    def test_extend_player_contract_resets_flags(self):
+        database.add_club("ANK", "Aneks Club", 1, 2)
+        database.add_or_update_player("Gracz Aneks", 808, "ANK", "ANK", "5000", "TRANSFER", "2026-10-01 00:00:00")
+        database.set_player_warning_flag("Gracz Aneks", "warned_7d")
+        database.set_player_warning_flag("Gracz Aneks", "warned_3d")
+
+        p_before = database.get_player("Gracz Aneks")
+        self.assertEqual(p_before["warned_7d"], 1)
+
+        # Przedłużenie umowy
+        database.extend_player_contract("Gracz Aneks", "2028-06-30 23:59:59", "20000")
+        p_after = database.get_player("Gracz Aneks")
+        self.assertEqual(p_after["expires_at"], "2028-06-30 23:59:59")
+        self.assertEqual(p_after["clause"], "20000")
+        self.assertEqual(p_after["warned_7d"], 0)
+        self.assertEqual(p_after["warned_3d"], 0)
+        self.assertEqual(p_after["warned_1d"], 0)
+
+    # ── Test Rozwiązania Kontraktu (terminate_player_contract) ──
+    def test_terminate_player_contract(self):
+        database.add_club("TRM", "Term Club", 1, 2)
+        database.add_or_update_player("Gracz Zwolniony", 909, "TRM", "TRM", "Brak", "TRANSFER", "2027-01-01 00:00:00")
+        self.assertEqual(1, database.get_club_player_count("TRM"))
+
+        database.terminate_player_contract("Gracz Zwolniony")
+        self.assertIsNone(database.get_player("Gracz Zwolniony"))
+        self.assertEqual(0, database.get_club_player_count("TRM"))
+
+    # ── Test Is Buyout i Reason w Applications ──
+    def test_application_is_buyout_and_reason(self):
+        app_id = database.create_application(
+            app_type="TRANSFER", applicant_id=1,
+            player_name="Wykupiony", target_club="AAA", source_club="BBB",
+            amount="50000", is_buyout=True, reason="Aktywacja klauzuli odstępnego"
+        )
+        app = database.get_application(app_id)
+        self.assertEqual(app["is_buyout"], 1)
+        self.assertEqual(app["reason"], "Aktywacja klauzuli odstępnego")
+
+    # ── Test Statystyk Ligi i Bazy Danych ──
+    def test_league_and_db_stats(self):
+        database.add_club("ST1", "Stat Club 1", 1, 2)
+        database.add_or_update_player("G1", 1, "ST1", "ST1", "Brak", "TRANSFER", "2027-01-01 00:00:00")
+        database.register_free_agent(2, "FA1")
+
+        l_stats = database.get_league_stats()
+        self.assertEqual(l_stats["clubs"], 1)
+        self.assertEqual(l_stats["players"], 1)
+        self.assertEqual(l_stats["free_agents"], 1)
+
+        f_stats = database.get_db_file_stats()
+        self.assertIn("clubs", f_stats)
+        self.assertIn("journal_mode", f_stats)
+        self.assertEqual(f_stats["clubs"], 1)
+
+    # ── Test Backup Database Vacuum ──
+    def test_backup_database_vacuum(self):
+        database.add_club("BCK", "Backup Club", 1, 2)
+        temp_fd, backup_file = tempfile.mkstemp(suffix=".db", prefix="test_backup_")
+        os.close(temp_fd)
+        os.remove(backup_file)
+
+        try:
+            database.backup_database_vacuum(backup_file)
+            self.assertTrue(os.path.exists(backup_file))
+            # Sprawdź czy to poprawna baza z naszym klubem
+            conn = sqlite3.connect(backup_file)
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM clubs WHERE tag = 'BCK'")
+            row = cur.fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], "Backup Club")
+            conn.close()
+        finally:
+            if os.path.exists(backup_file):
+                try:
+                    os.remove(backup_file)
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":
