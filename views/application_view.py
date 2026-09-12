@@ -39,7 +39,7 @@ class ForumApplicationView(ui.View):
         is_transfer_type = app_type in ("TRANSFER", "WYPOZYCZENIE", "PODPISANIE", "ANEKS", "ROZWIAZANIE_POLUBOWNE")
 
         # ── Zgoda gracza ──
-        if app.get("needs_player_agree") and is_transfer_type:
+        if app.get("needs_player_agree") and app.get("player_discord_id") and is_transfer_type:
             if app.get("player_agreed"):
                 btn = ui.Button(label="Zgoda gracza ✅", style=discord.ButtonStyle.green,
                                 disabled=True, custom_id=f"app:{self.app_id}:p_agree")
@@ -222,27 +222,58 @@ class ForumApplicationView(ui.View):
 
         await interaction.response.defer()
 
-        # ── Atomowy CAS: PENDING → PROCESSING (ochrona przed race conditions) ──
+        # ── Atomowy CAS: PENDING → PROCESSING (z auto-odblokowaniem przy awarii) ──
         app = database.try_claim_application_for_approval(self.app_id)
         if not app:
+            existing = database.get_application(self.app_id)
+            if existing and existing.get("status") == "PROCESSING":
+                database.revert_application_status(self.app_id, "PENDING")
+                app = database.try_claim_application_for_approval(self.app_id)
+
+        if not app:
+            existing = database.get_application(self.app_id)
+            if existing and existing.get("status") == "ACCEPTED":
+                try:
+                    embed = interaction.message.embeds[0]
+                    embed.color = 0x2ecc71
+                    embed.title = f"✅ Zaakceptowano: {existing.get('player_name') or existing.get('club_name') or 'Wniosek'}"
+                    await interaction.message.edit(embed=embed, view=None)
+                except Exception:
+                    pass
+                try:
+                    await self._archive_thread(interaction.channel)
+                except Exception:
+                    pass
+                return await interaction.followup.send(
+                    "✅ Ten wniosek został już wcześniej pomyślnie zatwierdzony w bazie (wątek zaktualizowany i zarchiwizowany).",
+                    ephemeral=True
+                )
+
             return await interaction.followup.send(
-                "❌ Ten wniosek jest już przetwarzany lub został wcześniej zamknięty.", ephemeral=True)
+                "❌ Ten wniosek jest już przetwarzany lub został wcześniej zamknięty/odrzucony.", ephemeral=True)
 
         app_type = app.get("type")
         guild = interaction.guild
         kom_channel = await get_komunikaty_channel(interaction.client, guild)
 
         try:
-            await self._execute_accept(interaction, app, app_type, guild, kom_channel)
+            ok = await self._execute_accept(interaction, app, app_type, guild, kom_channel)
+            if ok:
+                try:
+                    await interaction.followup.send("✅ Wniosek został pomyślnie zatwierdzony.", ephemeral=True)
+                except Exception as e:
+                    print(f"[ForumView] Błąd followup akceptacji: {e}")
         except Exception as e:
             # Rollback statusu PROCESSING → PENDING przy błędzie krytycznym
             database.revert_application_status(self.app_id)
             print(f"[ForumView] BŁĄD w cb_fed_accept (app #{self.app_id}): {e}")
-            await interaction.followup.send(
-                f"❌ Wystąpił błąd podczas przetwarzania wniosku. Status cofnięty do PENDING.\n`{e}`",
-                ephemeral=True
-            )
-            raise
+            try:
+                await interaction.followup.send(
+                    f"❌ Wystąpił błąd podczas przetwarzania wniosku. Status cofnięty do PENDING.\n`{e}`",
+                    ephemeral=True
+                )
+            except Exception:
+                pass
 
     async def _execute_accept(self, interaction, app, app_type, guild, kom_channel):
         # ─── REJESTRACJA KLUBU ───
@@ -287,20 +318,24 @@ class ForumApplicationView(ui.View):
             await interaction.message.edit(embed=embed, view=None)
 
             if kom_channel:
-                embed_kom = discord.Embed(
-                    title="📢 Nowy Klub w Federacji (FSS)",
-                    description=f"Zespół **{nazwa}** (`{skrot}`) został pomyślnie zarejestrowany w Federacji Siatkówki Stołowej (FSS)!",
-                    color=0x2ecc71
-                )
-                await kom_channel.send(embed=embed_kom)
+                try:
+                    embed_kom = discord.Embed(
+                        title="📢 Nowy Klub w Federacji (FSS)",
+                        description=f"Zespół **{nazwa}** (`{skrot}`) został pomyślnie zarejestrowany w Federacji Siatkówki Stołowej (FSS)!",
+                        color=0x2ecc71
+                    )
+                    await kom_channel.send(embed=embed_kom)
+                except Exception as e:
+                    print(f"[Fed] Błąd wysyłania ogłoszenia rejestracji: {e}")
 
         # ─── PODPISANIE ───
         elif app_type == "PODPISANIE":
             target_club = clean_tag(app.get("target_club"))
             if database.get_club_player_count(target_club) >= league_config.max_players():
                 database.revert_application_status(self.app_id)
-                return await interaction.followup.send(
+                await interaction.followup.send(
                     f"❌ Klub `{target_club}` osiągnął limit {league_config.max_players()}/{league_config.max_players()} graczy!", ephemeral=True)
+                return False
 
             gracz = app.get("player_name")
             dc_id = app.get("player_discord_id")
@@ -334,12 +369,15 @@ class ForumApplicationView(ui.View):
             await interaction.message.edit(embed=embed, view=None)
 
             if kom_channel:
-                c_nazwa = c_target.get("name", target_club) if c_target else target_club
-                await kom_channel.send(
-                    f"📢 **OFICJALNIE:** Zawodnik **{gracz}** dołącza do **{c_nazwa}** (`{target_club}`)!\n"
-                    f"> Ważność: `{app.get('expires_at')}` | Klauzula: `{app.get('clause')}`",
-                    allowed_mentions=discord.AllowedMentions.none()
-                )
+                try:
+                    c_nazwa = c_target.get("name", target_club) if c_target else target_club
+                    await kom_channel.send(
+                        f"📢 **OFICJALNIE:** Zawodnik **{gracz}** dołącza do **{c_nazwa}** (`{target_club}`)!\n"
+                        f"> Ważność: `{app.get('expires_at')}` | Klauzula: `{app.get('clause')}`",
+                        allowed_mentions=discord.AllowedMentions.none()
+                    )
+                except Exception as e:
+                    print(f"[Fed] Błąd wysyłania ogłoszenia podpisania: {e}")
             if dc_id:
                 await send_dm(interaction.client, dc_id,
                               f"📄 Twój kontrakt z `{target_club}` został zatwierdzony!\n"
@@ -351,8 +389,9 @@ class ForumApplicationView(ui.View):
             source_club = clean_tag(app.get("source_club"))
             if database.get_club_player_count(target_club) >= league_config.max_players():
                 database.revert_application_status(self.app_id)
-                return await interaction.followup.send(
+                await interaction.followup.send(
                     f"❌ Klub `{target_club}` jest już pełny ({league_config.max_players()}/{league_config.max_players()})!", ephemeral=True)
+                return False
 
             gracz = app.get("player_name")
             dc_id = app.get("player_discord_id")
@@ -394,13 +433,16 @@ class ForumApplicationView(ui.View):
             await interaction.message.edit(embed=embed, view=None)
 
             if kom_channel:
-                t_nazwa = c_target.get("name", target_club) if c_target else target_club
-                hype = "🔥🚨 **BOMBA TRANSFEROWA!**" if app.get("is_buyout") else "📢 **OFICJALNIE:**"
-                await kom_channel.send(
-                    f"{hype} Zawodnik **{gracz}** przechodzi do **{t_nazwa}** (`{target_club}`)!\n"
-                    f"> Kwota: `{app.get('amount')}` | Nowa klauzula: `{app.get('clause')}` | Umowa do: `{app.get('expires_at')}`",
-                    allowed_mentions=discord.AllowedMentions.none()
-                )
+                try:
+                    t_nazwa = c_target.get("name", target_club) if c_target else target_club
+                    hype = "🔥🚨 **BOMBA TRANSFEROWA!**" if app.get("is_buyout") else "📢 **OFICJALNIE:**"
+                    await kom_channel.send(
+                        f"{hype} Zawodnik **{gracz}** przechodzi do **{t_nazwa}** (`{target_club}`)!\n"
+                        f"> Kwota: `{app.get('amount')}` | Nowa klauzula: `{app.get('clause')}` | Umowa do: `{app.get('expires_at')}`",
+                        allowed_mentions=discord.AllowedMentions.none()
+                    )
+                except Exception as e:
+                    print(f"[Fed] Błąd ogłoszenia transferu: {e}")
             if dc_id:
                 await send_dm(interaction.client, dc_id,
                               f"📄 Transfer do `{target_club}` zatwierdzony!\n"
@@ -412,8 +454,9 @@ class ForumApplicationView(ui.View):
             source_club = clean_tag(app.get("source_club"))
             if database.get_club_player_count(target_club) >= league_config.max_players():
                 database.revert_application_status(self.app_id)
-                return await interaction.followup.send(
+                await interaction.followup.send(
                     f"❌ Klub `{target_club}` jest już pełny ({league_config.max_players()}/{league_config.max_players()})!", ephemeral=True)
+                return False
 
             gracz = app.get("player_name")
             dc_id = app.get("player_discord_id")
@@ -462,12 +505,15 @@ class ForumApplicationView(ui.View):
             await interaction.message.edit(embed=embed, view=None)
 
             if kom_channel:
-                t_nazwa = c_target.get("name", target_club) if c_target else target_club
-                await kom_channel.send(
-                    f"📢 **OFICJALNIE:** Zawodnik **{gracz}** wypożyczony do **{t_nazwa}** (`{target_club}`)!\n"
-                    f"> Koniec wypożyczenia: `{app.get('expires_at')}` | Opłata: `{app.get('amount')}`",
-                    allowed_mentions=discord.AllowedMentions.none()
-                )
+                try:
+                    t_nazwa = c_target.get("name", target_club) if c_target else target_club
+                    await kom_channel.send(
+                        f"📢 **OFICJALNIE:** Zawodnik **{gracz}** wypożyczony do **{t_nazwa}** (`{target_club}`)!\n"
+                        f"> Koniec wypożyczenia: `{app.get('expires_at')}` | Opłata: `{app.get('amount')}`",
+                        allowed_mentions=discord.AllowedMentions.none()
+                    )
+                except Exception as e:
+                    print(f"[Fed] Błąd ogłoszenia wypożyczenia: {e}")
             if dc_id:
                 await send_dm(interaction.client, dc_id,
                               f"📄 Wypożyczenie do `{target_club}` zatwierdzone!\n> Powrót: `{app.get('expires_at')}`")
@@ -493,13 +539,16 @@ class ForumApplicationView(ui.View):
             await interaction.message.edit(embed=embed, view=None)
 
             if kom_channel:
-                c_info = database.get_club(target_club)
-                c_nazwa = c_info.get("name", target_club) if c_info else target_club
-                await kom_channel.send(
-                    f"📄 **PRZEDŁUŻENIE KONTRAKTU:** Zawodnik **{gracz}** przedłużył umowę z **{c_nazwa}** (`{target_club}`)!\n"
-                    f"> Nowy termin: `{new_expires}` | Klauzula: `{new_clause}`",
-                    allowed_mentions=discord.AllowedMentions.none()
-                )
+                try:
+                    c_info = database.get_club(target_club)
+                    c_nazwa = c_info.get("name", target_club) if c_info else target_club
+                    await kom_channel.send(
+                        f"📄 **PRZEDŁUŻENIE KONTRAKTU:** Zawodnik **{gracz}** przedłużył umowę z **{c_nazwa}** (`{target_club}`)!\n"
+                        f"> Nowy termin: `{new_expires}` | Klauzula: `{new_clause}`",
+                        allowed_mentions=discord.AllowedMentions.none()
+                    )
+                except Exception as e:
+                    print(f"[Fed] Błąd ogłoszenia aneksu: {e}")
             if dc_id:
                 await send_dm(interaction.client, dc_id,
                               f"📄 Twój aneks do kontraktu w `{target_club}` został zatwierdzony!\n"
@@ -535,13 +584,16 @@ class ForumApplicationView(ui.View):
             await interaction.message.edit(embed=embed, view=None)
 
             if kom_channel:
-                c_nazwa = c_source.get("name", source_club) if c_source else source_club
-                clean_n = clean_player_name(gracz, dc_id)
-                p_mention = f"**{clean_n}** (<@{dc_id}>)" if dc_id else f"**{clean_n}**"
-                await kom_channel.send(
-                    f"📢 **ROZWIĄZANIE UMOWY (FSS):** Kontrakt zawodnika {p_mention} z klubem **{c_nazwa}** (`{source_club}`) został rozwiązany ({tryb}).",
-                    allowed_mentions=discord.AllowedMentions.none()
-                )
+                try:
+                    c_nazwa = c_source.get("name", source_club) if c_source else source_club
+                    clean_n = clean_player_name(gracz, dc_id)
+                    p_mention = f"**{clean_n}** (<@{dc_id}>)" if dc_id else f"**{clean_n}**"
+                    await kom_channel.send(
+                        f"📢 **ROZWIĄZANIE UMOWY (FSS):** Kontrakt zawodnika {p_mention} z klubem **{c_nazwa}** (`{source_club}`) został rozwiązany ({tryb}).",
+                        allowed_mentions=discord.AllowedMentions.none()
+                    )
+                except Exception as e:
+                    print(f"[Fed] Błąd ogłoszenia rozwiązania: {e}")
             if dc_id:
                 await send_dm(interaction.client, dc_id,
                               f"📢 Twój kontrakt z `{source_club}` został rozwiązany ({tryb}).\n"
@@ -609,78 +661,105 @@ class ForumApplicationView(ui.View):
             await interaction.message.edit(embed=embed, view=None)
 
             if kom_channel:
-                tag_str = f"`{old_tag}` ➔ `{new_tag}`" if new_tag != old_tag else f"`{new_tag}`"
-                changes = []
-                if new_name and c_old and new_name != c_old.get("name"): changes.append(f"Nazwa: **{new_name}**")
-                if new_founder_txt and new_founder_txt.lower() != "bez zmian": changes.append(f"Właściciel: {new_founder_txt}")
-                if new_board_txt and new_board_txt.lower() != "bez zmian": changes.append(f"Zarząd: {new_board_txt}")
-                details = (" (" + ", ".join(changes) + ")") if changes else ""
-                await kom_channel.send(
-                    f"⚙️ **AKTUALIZACJA KLUBU!** Klub {tag_str} zaktualizował dane w federacji{details}!",
-                    allowed_mentions=discord.AllowedMentions.none()
-                )
+                try:
+                    tag_str = f"`{old_tag}` ➔ `{new_tag}`" if new_tag != old_tag else f"`{new_tag}`"
+                    changes = []
+                    if new_name and c_old and new_name != c_old.get("name"): changes.append(f"Nazwa: **{new_name}**")
+                    if new_founder_txt and new_founder_txt.lower() != "bez zmian": changes.append(f"Właściciel: {new_founder_txt}")
+                    if new_board_txt and new_board_txt.lower() != "bez zmian": changes.append(f"Zarząd: {new_board_txt}")
+                    details = (" (" + ", ".join(changes) + ")") if changes else ""
+                    await kom_channel.send(
+                        f"⚙️ **AKTUALIZACJA KLUBU!** Klub {tag_str} zaktualizował dane w federacji{details}!",
+                        allowed_mentions=discord.AllowedMentions.none()
+                    )
+                except Exception as e:
+                    print(f"[Fed] Błąd ogłoszenia aktualizacji klubu: {e}")
 
         # ─── Archiwizacja wątku ───
-        await self._archive_thread(interaction.channel)
+        try:
+            await self._archive_thread(interaction.channel)
+        except Exception as e:
+            print(f"[ForumView] Błąd archiwizacji wątku: {e}")
+
+        return True
 
     async def cb_fed_reject(self, interaction: discord.Interaction):
         if not is_federation(interaction.user):
             return await interaction.response.send_message(
                 "❌ Tylko Zarząd Federacji może odrzucić wniosek.", ephemeral=True)
-                
-        # Use modal to ask for reject reason
-        await interaction.response.send_modal(RejectReasonModal(self.app_id, self._archive_thread))
 
-class RejectReasonModal(discord.ui.Modal, title="Powód Odrzucenia Wniosku"):
-    def __init__(self, app_id, archive_method):
-        super().__init__()
-        self.app_id = app_id
-        self.archive_method = archive_method
-        self.reason = discord.ui.TextInput(
-            label="Podaj powód odrzucenia:",
-            style=discord.TextStyle.paragraph,
-            required=True,
-            max_length=1000
-        )
-        self.add_item(self.reason)
+        await interaction.response.defer()
 
-    async def on_submit(self, interaction: discord.Interaction):
         app = database.try_claim_application_for_approval(self.app_id)
         if not app:
-            return await interaction.response.send_message("❌ Ten wniosek jest już zamknięty lub przetwarzany.", ephemeral=True)
+            existing = database.get_application(self.app_id)
+            if existing and existing.get("status") == "PROCESSING":
+                database.revert_application_status(self.app_id, "PENDING")
+                app = database.try_claim_application_for_approval(self.app_id)
+
+        if not app:
+            return await interaction.followup.send(
+                "❌ Ten wniosek jest już przetwarzany lub został wcześniej zamknięty/odrzucony.", ephemeral=True)
 
         database.set_application_status(self.app_id, "REJECTED", rejected_by=f"Federacja ({interaction.user.mention})")
-        
-        embed = interaction.message.embeds[0]
-        embed.color = 0xe74c3c
-        embed.title = f"❌ ODRZUCONO: {embed.title or 'Wniosek'}"
-        embed.add_field(name="Decyzja Federacji",
-                        value=f"Wniosek odrzucony przez {interaction.user.mention}.", inline=False)
-        embed.add_field(name="Powód odrzucenia", value=self.reason.value, inline=False)
-        
-        await interaction.message.edit(embed=embed, view=None)
-        
-        from config import CHANNEL_KOMUNIKATY_ID
-        kom_channel = interaction.guild.get_channel(CHANNEL_KOMUNIKATY_ID)
+
+        try:
+            embed = interaction.message.embeds[0]
+            embed.color = 0xe74c3c
+            embed.title = f"❌ ODRZUCONO: {embed.title or 'Wniosek'}"
+            embed.add_field(name="Decyzja Federacji",
+                            value=f"Wniosek odrzucony przez {interaction.user.mention}.", inline=False)
+            for i, f in enumerate(embed.fields):
+                if f.name == "Status":
+                    embed.set_field_at(i, name="Status",
+                                       value=f"❌ Odrzucono ({interaction.user.mention})", inline=False)
+            await interaction.message.edit(embed=embed, view=None)
+        except Exception as e:
+            print(f"[ForumView] Błąd aktualizacji embeda przy odrzuceniu: {e}")
+
+        kom_channel = await get_komunikaty_channel(interaction.client, interaction.guild)
         if kom_channel:
-            embed_kom = discord.Embed(
-                title="❌ Wniosek Odrzucony",
-                description=f"Wniosek #{self.app_id} został odrzucony przez Federację.",
-                color=0xe74c3c
-            )
-            embed_kom.add_field(name="Typ wniosku", value=app.get("type", "Nieznany"), inline=True)
-            embed_kom.add_field(name="Powód", value=self.reason.value, inline=False)
-            await kom_channel.send(embed=embed_kom)
-            
-        await interaction.response.send_message("✅ Wniosek odrzucony i powód wysłany.", ephemeral=True)
-        await self.archive_method(interaction.channel)
+            try:
+                embed_kom = discord.Embed(
+                    title="❌ Wniosek Odrzucony",
+                    description=f"Wniosek #{self.app_id} ({app.get('type', 'Nieznany')}) został odrzucony przez Zarząd Federacji ({interaction.user.mention}).",
+                    color=0xe74c3c
+                )
+                await kom_channel.send(embed=embed_kom)
+            except Exception as e:
+                print(f"[ForumView] Błąd komunikatu odrzucenia: {e}")
+
+        player_id = app.get("player_discord_id")
+        if player_id:
+            try:
+                await send_dm(interaction.client, player_id,
+                              f"❌ Wniosek #{self.app_id} ({app.get('type')}) został odrzucony przez Zarząd Federacji.")
+            except Exception:
+                pass
+        applicant_id = app.get("applicant_id")
+        if applicant_id and applicant_id != player_id:
+            try:
+                await send_dm(interaction.client, applicant_id,
+                              f"❌ Twój wniosek #{self.app_id} ({app.get('type')}) został odrzucony przez Zarząd Federacji.")
+            except Exception:
+                pass
+
+        try:
+            await interaction.followup.send("✅ Wniosek został pomyślnie odrzucony.", ephemeral=True)
+        except Exception as e:
+            print(f"[ForumView] Błąd followup odrzucenia: {e}")
+
+        try:
+            await self._archive_thread(interaction.channel)
+        except Exception as e:
+            print(f"[ForumView] Błąd archiwizacji wątku: {e}")
 
     # ─────────────────────────── POMOCNICZE ───────────────────────────────────
 
     def _update_status_field(self, embed: discord.Embed, app: dict) -> discord.Embed:
         if not app: return embed
         lines = []
-        if app.get("needs_player_agree"):
+        if app.get("needs_player_agree") and app.get("player_discord_id"):
             lines.append(f"• Zawodnik: {'✅ Udzielono' if app.get('player_agreed') else '⏳ Oczekuje'}")
         else:
             lines.append("• Zawodnik: ℹ️ Brak konta Discord")

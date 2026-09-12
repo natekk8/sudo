@@ -78,6 +78,12 @@ async def on_ready():
     bot.add_view(WidokPaneluGlownego())
     bot.add_view(WidokRynkuTransferowego())
 
+    # Odblokuj wnioski, które mogły utknąć w statusie PROCESSING po restarcie
+    try:
+        database.reset_stuck_processing_applications()
+    except Exception as e:
+        print(f"[on_ready] Błąd resetu PROCESSING: {e}")
+
     for app in database.get_pending_applications():
         msg_id = app.get("message_id")
         if msg_id:
@@ -105,6 +111,42 @@ async def on_ready():
         expirations_task.start()
 
     print(f"[on_ready] Bot Federacji zalogowany jako: {bot.user} | Guild ID: {GUILD_ID or 'auto'}")
+
+
+@bot.event
+async def on_interaction(interaction: discord.Interaction):
+    # Dynamiczny fallback dla przycisków wniosków (custom_id: app:<app_id>:<action>)
+    # Jeśli discord.py odrzucił interakcję (unknown view), obsługujemy ją automatycznie
+    if interaction.type == discord.InteractionType.component:
+        cid = interaction.data.get("custom_id", "")
+        if cid.startswith("app:") and not interaction.response.is_done():
+            try:
+                parts = cid.split(":")
+                if len(parts) >= 3:
+                    app_id = int(parts[1])
+                    action = parts[2]
+                    view = ForumApplicationView(app_id)
+                    if interaction.message:
+                        try:
+                            bot.add_view(view, message_id=interaction.message.id)
+                            database.set_application_message(app_id, interaction.channel.id, interaction.message.id)
+                        except Exception:
+                            pass
+
+                    action_map = {
+                        "fed_accept": view.cb_fed_accept,
+                        "fed_reject": view.cb_fed_reject,
+                        "p_agree": view.cb_player_agree,
+                        "t_agree": view.cb_target_agree,
+                        "s_agree": view.cb_source_agree,
+                        "party_reject": view.cb_party_reject,
+                        "history": view.cb_history,
+                    }
+                    handler = action_map.get(action)
+                    if handler:
+                        await handler(interaction)
+            except Exception as e:
+                print(f"[on_interaction] Błąd dynamicznego dispatchu dla {cid}: {e}")
 
 
 if __name__ == "__main__":

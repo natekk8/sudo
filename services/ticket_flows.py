@@ -29,8 +29,19 @@ async def _create_ticket_channel(guild: discord.Guild, user: discord.Member, pre
     return await guild.create_text_channel(f"{prefix}-{ticket_id}", overwrites=overwrites)
 
 
+async def _safe_delete_channel(kanal):
+    if not kanal: return
+    try:
+        await kanal.delete(reason="Ticket zakończony")
+    except Exception:
+        pass
+
+
 async def _zadaj_pytanie(kanal, uzytkownik, pytanie, client) -> str:
-    await kanal.send(embed=discord.Embed(description=f"❓ {pytanie}", color=0x3498db))
+    try:
+        await kanal.send(embed=discord.Embed(description=f"❓ {pytanie}", color=0x3498db))
+    except Exception:
+        raise TimeoutError("Kanał został zamknięty")
 
     def check(m):
         return m.author == uzytkownik and m.channel == kanal
@@ -39,16 +50,16 @@ async def _zadaj_pytanie(kanal, uzytkownik, pytanie, client) -> str:
         msg = await client.wait_for('message', check=check, timeout=900.0)
         return msg.content.strip()
     except asyncio.TimeoutError:
-        await kanal.send(embed=discord.Embed(
-            title="⏳ Upłynął czas",
-            description="**Minęło 15 minut braku aktywności.** Wniosek anulowany.",
-            color=0xf39c12
-        ))
-        await asyncio.sleep(3)
         try:
-            await kanal.delete()
+            await kanal.send(embed=discord.Embed(
+                title="⏳ Upłynął czas",
+                description="**Minęło 15 minut braku aktywności.** Wniosek anulowany.",
+                color=0xf39c12
+            ))
+            await asyncio.sleep(3)
         except Exception:
             pass
+        await _safe_delete_channel(kanal)
         raise TimeoutError("Timeout ankiety")
 
 
@@ -64,7 +75,7 @@ async def _send_forum_application(guild, kanal, embed, thread_name, app_id,
     await kanal.send(embed=discord.Embed(description="✅ Wniosek wysłany na forum! Zamykam kanał...", color=0x2ecc71))
     await asyncio.sleep(2)
     try:
-        await kanal.delete()
+        await _safe_delete_channel(kanal)
     except Exception:
         pass
     return thread.thread
@@ -122,7 +133,7 @@ async def proces_rejestracji_klubu(interaction: discord.Interaction):
         if not v.value:
             await kanal.send(embed=discord.Embed(description="❌ Wniosek anulowany.", color=0xe74c3c))
             await asyncio.sleep(2)
-            await kanal.delete()
+            await _safe_delete_channel(kanal)
             return
 
         app_id = database.create_application(
@@ -138,7 +149,7 @@ async def proces_rejestracji_klubu(interaction: discord.Interaction):
         try:
             await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c))
             await asyncio.sleep(5)
-            await kanal.delete()
+            await _safe_delete_channel(kanal)
         except Exception:
             pass
 
@@ -177,7 +188,7 @@ async def proces_podpisania(interaction: discord.Interaction):
             elif database.get_club_player_count(kup) >= league_config.max_players():
                 await kanal.send(embed=discord.Embed(description=f"❌ Klub pełny ({league_config.max_players()}/{league_config.max_players()}). Podpisanie niemożliwe.", color=0xe74c3c))
                 await asyncio.sleep(5)
-                await kanal.delete()
+                await _safe_delete_channel(kanal)
                 return
             else:
                 break
@@ -196,7 +207,7 @@ async def proces_podpisania(interaction: discord.Interaction):
                 )
             )
             await asyncio.sleep(5)
-            await kanal.delete()
+            await _safe_delete_channel(kanal)
             return
 
         while True:
@@ -233,7 +244,7 @@ async def proces_podpisania(interaction: discord.Interaction):
         if not v.value:
             await kanal.send(embed=discord.Embed(description="❌ Wniosek anulowany.", color=0xe74c3c))
             await asyncio.sleep(2)
-            await kanal.delete()
+            await _safe_delete_channel(kanal)
             return
 
         app_id = database.create_application(
@@ -254,7 +265,7 @@ async def proces_podpisania(interaction: discord.Interaction):
         try:
             await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c))
             await asyncio.sleep(5)
-            await kanal.delete()
+            await _safe_delete_channel(kanal)
         except Exception:
             pass
 
@@ -292,7 +303,7 @@ async def proces_transferu(interaction: discord.Interaction):
                 await kanal.send(embed=discord.Embed(description="❌ Odmowa – nie jesteś w zarządzie tego klubu!", color=0xe74c3c))
             elif database.get_club_player_count(kup) >= league_config.max_players():
                 await kanal.send(embed=discord.Embed(description=f"❌ Klub pełny ({league_config.max_players()}/{league_config.max_players()}).", color=0xe74c3c))
-                await asyncio.sleep(5); await kanal.delete(); return
+                await asyncio.sleep(5); await _safe_delete_channel(kanal); return
             else:
                 break
 
@@ -387,7 +398,7 @@ async def proces_transferu(interaction: discord.Interaction):
         await v.wait()
         if not v.value:
             await kanal.send(embed=discord.Embed(description="❌ Wniosek anulowany.", color=0xe74c3c))
-            await asyncio.sleep(2); await kanal.delete(); return
+            await asyncio.sleep(2); await _safe_delete_channel(kanal); return
 
         app_id = database.create_application(
             app_type="TRANSFER", applicant_id=user.id,
@@ -408,7 +419,7 @@ async def proces_transferu(interaction: discord.Interaction):
         pass
     except Exception as e:
         print(f"[proces_transferu] Błąd: {e}\n{traceback.format_exc()}")
-        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await kanal.delete()
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await _safe_delete_channel(kanal)
         except Exception: pass
 
 
@@ -445,7 +456,7 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
                 await kanal.send(embed=discord.Embed(description="❌ Odmowa – nie jesteś w zarządzie tego klubu!", color=0xe74c3c))
             elif database.get_club_player_count(kup) >= league_config.max_players():
                 await kanal.send(embed=discord.Embed(description=f"❌ Klub pełny ({league_config.max_players()}/{league_config.max_players()}).", color=0xe74c3c))
-                await asyncio.sleep(5); await kanal.delete(); return
+                await asyncio.sleep(5); await _safe_delete_channel(kanal); return
             else:
                 break
 
@@ -516,7 +527,7 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
         await v.wait()
         if not v.value:
             await kanal.send(embed=discord.Embed(description="❌ Wniosek anulowany.", color=0xe74c3c))
-            await asyncio.sleep(2); await kanal.delete(); return
+            await asyncio.sleep(2); await _safe_delete_channel(kanal); return
 
         app_id = database.create_application(
             app_type="WYPOZYCZENIE", applicant_id=user.id,
@@ -537,7 +548,7 @@ async def proces_wypozyczenia(interaction: discord.Interaction):
         pass
     except Exception as e:
         print(f"[proces_wypozyczenia] Błąd: {e}\n{traceback.format_exc()}")
-        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await kanal.delete()
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await _safe_delete_channel(kanal)
         except Exception: pass
 
 
@@ -570,7 +581,7 @@ async def proces_aneksu(interaction: discord.Interaction):
 
         if not user_club:
             await kanal.send(embed=discord.Embed(description="❌ Nie jesteś w zarządzie żadnego zarejestrowanego klubu.", color=0xe74c3c))
-            await asyncio.sleep(5); await kanal.delete(); return
+            await asyncio.sleep(5); await _safe_delete_channel(kanal); return
 
         # Zawodnik musi być w tym samym klubie
         while True:
@@ -624,7 +635,7 @@ async def proces_aneksu(interaction: discord.Interaction):
         await v.wait()
         if not v.value:
             await kanal.send(embed=discord.Embed(description="❌ Wniosek anulowany.", color=0xe74c3c))
-            await asyncio.sleep(2); await kanal.delete(); return
+            await asyncio.sleep(2); await _safe_delete_channel(kanal); return
 
         app_id = database.create_application(
             app_type="ANEKS", applicant_id=user.id,
@@ -642,7 +653,7 @@ async def proces_aneksu(interaction: discord.Interaction):
         pass
     except Exception as e:
         print(f"[proces_aneksu] Błąd: {e}\n{traceback.format_exc()}")
-        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await kanal.delete()
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await _safe_delete_channel(kanal)
         except Exception: pass
 
 
@@ -674,7 +685,7 @@ async def proces_rozwiazania(interaction: discord.Interaction):
                 break
         if not user_club:
             await kanal.send(embed=discord.Embed(description="❌ Nie jesteś w zarządzie żadnego zarejestrowanego klubu.", color=0xe74c3c))
-            await asyncio.sleep(5); await kanal.delete(); return
+            await asyncio.sleep(5); await _safe_delete_channel(kanal); return
 
         while True:
             gracz_input = await _zadaj_pytanie(kanal, user, f"Oznacz @Zawodnika do rozwiązania (z klubu `{user_club}`):", client)
@@ -725,7 +736,7 @@ async def proces_rozwiazania(interaction: discord.Interaction):
         await v.wait()
         if not v.value:
             await kanal.send(embed=discord.Embed(description="❌ Wniosek anulowany.", color=0xe74c3c))
-            await asyncio.sleep(2); await kanal.delete(); return
+            await asyncio.sleep(2); await _safe_delete_channel(kanal); return
 
         app_id = database.create_application(
             app_type=app_type, applicant_id=user.id,
@@ -744,7 +755,7 @@ async def proces_rozwiazania(interaction: discord.Interaction):
         pass
     except Exception as e:
         print(f"[proces_rozwiazania] Błąd: {e}\n{traceback.format_exc()}")
-        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await kanal.delete()
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await _safe_delete_channel(kanal)
         except Exception: pass
 
 
@@ -776,7 +787,7 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
                 break
         if not user_club:
             await kanal.send(embed=discord.Embed(description="❌ Nie jesteś w zarządzie ani właścicielem żadnego zarejestrowanego klubu.", color=0xe74c3c))
-            await asyncio.sleep(5); await kanal.delete(); return
+            await asyncio.sleep(5); await _safe_delete_channel(kanal); return
 
         stary_klub = database.get_club(user_club)
         stara_nazwa = stary_klub.get("name", user_club)
@@ -822,7 +833,7 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
         if (nowy_tag == user_club and nowa_nazwa == stara_nazwa and
             nowy_wlasciciel == stary_wlasciciel and nowy_zarzad == stary_zarzad):
             await kanal.send(embed=discord.Embed(description="❌ Nie wprowadzono żadnych zmian w danych klubu. Anulowanie.", color=0xe74c3c))
-            await asyncio.sleep(3); await kanal.delete(); return
+            await asyncio.sleep(3); await _safe_delete_channel(kanal); return
 
         # 5. Powód
         powod = await _zadaj_pytanie(kanal, user, "Podaj powód wprowadzanych zmian:", client)
@@ -841,7 +852,7 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
         await v.wait()
         if not v.value:
             await kanal.send(embed=discord.Embed(description="❌ Wniosek anulowany.", color=0xe74c3c))
-            await asyncio.sleep(2); await kanal.delete(); return
+            await asyncio.sleep(2); await _safe_delete_channel(kanal); return
 
         app_id = database.create_application(
             app_type="ZARZADZANIE_KLUBU", applicant_id=user.id,
@@ -858,7 +869,7 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
         pass
     except Exception as e:
         print(f"[proces_zarzadzania_klubem] Błąd: {e}\n{traceback.format_exc()}")
-        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await kanal.delete()
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await _safe_delete_channel(kanal)
         except Exception: pass
 
 proces_rebrandingu = proces_zarzadzania_klubem

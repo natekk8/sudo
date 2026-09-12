@@ -162,30 +162,10 @@ def init_db():
 
             _migrate_columns(cursor)
 
-            cursor.execute("SELECT value FROM settings WHERE key = 'season_initialized'")
-            row = cursor.fetchone()
-            if not row or row[0] != "2026_27":
-                print("[Database] Inicjalizacja sezonu 2026/27: czyszczenie starych danych i zerowanie ticketów...")
-                cursor.execute("DELETE FROM players")
-                cursor.execute("DELETE FROM clubs")
-                cursor.execute("DELETE FROM applications")
-                cursor.execute("DELETE FROM transfer_history")
-                cursor.execute("DELETE FROM free_agents")
-                cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', 0)")
-                cursor.execute("DELETE FROM settings WHERE key NOT LIKE 'cfg_%'")
-                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('market_status', 'OPEN')")
-                cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('season_initialized', '2026_27')")
-                try:
-                    cursor.execute("DELETE FROM sqlite_sequence")
-                except Exception:
-                    pass
-                conn.commit()
-                try:
-                    cursor.execute("VACUUM")
-                except Exception:
-                    pass
-                print("[Database] Baza danych SQLite została wyczyszczona na sezon 2026/27 (kolejny ticket: #001).")
-
+            # Bezpieczna inicjalizacja domyślnych ustawień (bez usuwania jakichkolwiek danych użytkownika)
+            cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('market_status', 'OPEN')")
+            cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('season_initialized', '2026_27')")
+            cursor.execute("INSERT OR IGNORE INTO counters (name, value) VALUES ('ticket_counter', 0)")
             conn.commit()
 
     if os.path.exists(LEGACY_JSON_DB):

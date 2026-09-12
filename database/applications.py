@@ -61,6 +61,14 @@ def try_claim_application_for_approval(app_id: int):
                 return None
             return dict(row)
 
+def reset_stuck_processing_applications():
+    """Resetuje wnioski zablokowane w statusie PROCESSING z powrotem do PENDING przy restarcie bota."""
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE applications SET status = 'PENDING' WHERE status = 'PROCESSING'")
+            conn.commit()
+
 def revert_application_status(app_id: int, old_status: str = "PENDING"):
     with _lock:
         with get_connection() as conn:
