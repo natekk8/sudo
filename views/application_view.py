@@ -476,14 +476,13 @@ class ForumApplicationView(ui.View):
             # Rolę zarządu otrzymują WYŁĄCZNIE osoby wpisane we wniosku (właściciel + zarząd).
             # Osoba otwierająca ticket (np. członek Zarządu Federacji) NIE otrzymuje roli, chyba że została wymieniona w zarządzie.
             osoby = set(founder_ids + board_ids)
+            rep_id = founder_ids[0] if founder_ids else (board_ids[0] if board_ids else app.get("applicant_id"))
 
             for uid in osoby:
                 m = await get_or_fetch_member(guild, uid)
                 if m:
                     try: await m.add_roles(r_zarzad)
                     except Exception as e: print(f"[Fed] Błąd nadania roli {uid}: {e}")
-
-            rep_id = founder_ids[0] if founder_ids else (board_ids[0] if board_ids else app.get("applicant_id"))
 
             database.add_club(
                 tag=skrot, name=nazwa,

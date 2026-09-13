@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord.ext import commands
 from config import DISCORD_TOKEN, GUILD_ID
@@ -114,12 +115,31 @@ async def on_ready():
 
 
 @bot.event
+async def on_command_error(ctx, error):
+    # Ignoruj brakujące komendy prefixowe (np. pomyłki typu !site_panel)
+    if isinstance(error, commands.CommandNotFound):
+        return
+    elif isinstance(error, commands.MissingPermissions):
+        try:
+            await ctx.send("❌ Nie posiadasz uprawnień do użycia tej komendy.", delete_after=5)
+        except Exception:
+            pass
+    else:
+        print(f"[on_command_error] Błąd komendy {ctx.command}: {error}")
+
+
+@bot.event
 async def on_interaction(interaction: discord.Interaction):
     # Dynamiczny fallback dla przycisków wniosków (custom_id: app:<app_id>:<action>)
-    # Jeśli discord.py odrzucił interakcję (unknown view), obsługujemy ją automatycznie
+    # Jeśli discord.py odrzucił interakcję (unknown view), obsługujemy ją awaryjnie.
     if interaction.type == discord.InteractionType.component:
         cid = interaction.data.get("custom_id", "")
-        if cid.startswith("app:") and not interaction.response.is_done():
+        if cid.startswith("app:"):
+            # Dajemy chwilę na obsłużenie przez wbudowany dispatcher widoku discord.py
+            await asyncio.sleep(0.05)
+            if interaction.response.is_done():
+                return
+
             try:
                 parts = cid.split(":")
                 if len(parts) >= 3:
@@ -143,8 +163,14 @@ async def on_interaction(interaction: discord.Interaction):
                         "history": view.cb_history,
                     }
                     handler = action_map.get(action)
-                    if handler:
-                        await handler(interaction)
+                    if handler and not interaction.response.is_done():
+                        try:
+                            await handler(interaction)
+                        except discord.errors.HTTPException as err:
+                            if err.code == 40060:
+                                pass  # Interakcja została już obsłużona
+                            else:
+                                raise
             except Exception as e:
                 print(f"[on_interaction] Błąd dynamicznego dispatchu dla {cid}: {e}")
 

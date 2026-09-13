@@ -557,4 +557,3 @@ class TestAsyncApplicationView(unittest.IsolatedAsyncioTestCase):
         self.assertIn(222, club["board_ids"])
         self.assertIn(333, club["board_ids"])
         self.assertNotIn(999, club["board_ids"])
-
