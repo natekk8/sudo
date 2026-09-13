@@ -149,6 +149,8 @@ def _reconstruct_app_from_message(message: discord.Message, app_id: int, guild: 
         "applicant_id": None,
         "club_name": club_name,
         "club_tag": target_club if app_type in ("REJESTRACJA_KLUBU", "USUNIECIE_KLUBU", "ZARZADZANIE_KLUBU") else None,
+        "founder_txt": founder_txt,
+        "board_txt": board_txt,
         "player_name": player_name or f"Zawodnik #{app_id}",
         "player_discord_id": player_dc_id,
         "target_club": target_club,
@@ -471,8 +473,9 @@ class ForumApplicationView(ui.View):
 
             founder_ids = extract_ids(app.get("founder_txt", ""))
             board_ids = extract_ids(app.get("board_txt", ""))
+            # Rolę zarządu otrzymują WYŁĄCZNIE osoby wpisane we wniosku (właściciel + zarząd).
+            # Osoba otwierająca ticket (np. członek Zarządu Federacji) NIE otrzymuje roli, chyba że została wymieniona w zarządzie.
             osoby = set(founder_ids + board_ids)
-            if app.get("applicant_id"): osoby.add(app["applicant_id"])
 
             for uid in osoby:
                 m = await get_or_fetch_member(guild, uid)
@@ -480,10 +483,12 @@ class ForumApplicationView(ui.View):
                     try: await m.add_roles(r_zarzad)
                     except Exception as e: print(f"[Fed] Błąd nadania roli {uid}: {e}")
 
+            rep_id = founder_ids[0] if founder_ids else (board_ids[0] if board_ids else app.get("applicant_id"))
+
             database.add_club(
                 tag=skrot, name=nazwa,
                 role_board_id=r_zarzad.id, role_player_id=r_zawod.id,
-                reprezentant_dc=app.get("applicant_id"),
+                reprezentant_dc=rep_id,
                 founder_txt=app.get("founder_txt", ""),
                 board_txt=app.get("board_txt", ""),
                 board_ids=list(osoby)

@@ -476,3 +476,85 @@ class TestAsyncApplicationView(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(app)
         self.assertEqual(app["type"], "USUNIECIE_KLUBU")
         self.assertEqual(app["club_tag"], "ARS")
+
+    async def test_rejestracja_klubu_roles_only_to_founder_and_board_not_applicant(self):
+        import discord
+        from unittest.mock import AsyncMock, MagicMock
+        from views.application_view import ForumApplicationView
+        from config import ROLE_FEDERACJA_ID
+
+        # applicant_id to np. Zarząd Federacji (999), który wypełnia wniosek za kogoś
+        # Właściciel to 222, Zarząd to 333
+        app_id = database.create_application(
+            app_type="REJESTRACJA_KLUBU",
+            applicant_id=999,
+            club_name="Real Betis",
+            club_tag="BET",
+            founder_txt="<@222>",
+            board_txt="<@333>"
+        )
+
+        view = ForumApplicationView(app_id)
+        interaction = MagicMock()
+        fed_role = MagicMock()
+        fed_role.id = ROLE_FEDERACJA_ID
+        interaction.user.roles = [fed_role]
+        interaction.user.mention = "<@111>"
+        interaction.channel = MagicMock()
+        interaction.channel.edit = AsyncMock()
+        interaction.client.get_channel.return_value.send = AsyncMock()
+        interaction.client.fetch_user = AsyncMock()
+
+        msg = MagicMock()
+        embed = discord.Embed(title="🏛️ Podsumowanie: Real Betis")
+        embed.add_field(name="Skrót", value="`BET`")
+        embed.add_field(name="Właściciel", value="<@222>")
+        embed.add_field(name="Zarząd", value="<@333>")
+        embed.add_field(name="Status", value="Oczekuje...")
+        msg.embeds = [embed]
+        msg.edit = AsyncMock()
+        interaction.message = msg
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+
+        r_zarzad = MagicMock()
+        r_zarzad.id = 1001
+        r_zawod = MagicMock()
+        r_zawod.id = 1002
+
+        interaction.guild.create_role = AsyncMock(side_effect=[r_zarzad, r_zawod])
+        interaction.guild.get_role.return_value = None
+
+        m_applicant = MagicMock()
+        m_applicant.add_roles = AsyncMock()
+
+        m_founder = MagicMock()
+        m_founder.add_roles = AsyncMock()
+
+        m_board = MagicMock()
+        m_board.add_roles = AsyncMock()
+
+        def get_member_mock(uid):
+            if uid == 999: return m_applicant
+            if uid == 222: return m_founder
+            if uid == 333: return m_board
+            return None
+        interaction.guild.get_member.side_effect = get_member_mock
+
+        await view.cb_fed_accept(interaction)
+
+        # Weryfikacja: Właściciel (222) i Zarząd (333) dostali rolę r_zarzad
+        m_founder.add_roles.assert_awaited_with(r_zarzad)
+        m_board.add_roles.assert_awaited_with(r_zarzad)
+
+        # Autor ticketa (999 - Federacja) NIE może otrzymać roli klubu
+        m_applicant.add_roles.assert_not_awaited()
+
+        # W bazie danych reprezentantem jest właściciel (222), a board_ids zawiera tylko [222, 333]
+        club = database.get_club("BET")
+        self.assertIsNotNone(club)
+        self.assertEqual(club["reprezentant_dc"], 222)
+        self.assertIn(222, club["board_ids"])
+        self.assertIn(333, club["board_ids"])
+        self.assertNotIn(999, club["board_ids"])
+
