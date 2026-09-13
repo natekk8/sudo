@@ -80,3 +80,20 @@ def update_club_full(old_tag: str, new_tag: str = None, new_name: str = None,
 
 def rebrand_club(old_tag: str, new_tag: str, new_name: str):
     return update_club_full(old_tag, new_tag=new_tag, new_name=new_name)
+
+def delete_club(tag: str, terminate_players: bool = True) -> bool:
+    """Całkowicie usuwa klub z bazy danych oraz opcjonalnie zwalnia kontrakty jego zawodników."""
+    if not tag:
+        return False
+    tag = tag.strip().upper()
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM clubs WHERE tag = ?", (tag,))
+            if not cursor.fetchone():
+                return False
+            if terminate_players:
+                cursor.execute("DELETE FROM players WHERE club_tag = ?", (tag,))
+            cursor.execute("DELETE FROM clubs WHERE tag = ?", (tag,))
+            conn.commit()
+            return True

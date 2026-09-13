@@ -239,7 +239,8 @@ def init_db():
         except Exception:
             pass
 
-def reset_database_for_new_season():
+def reset_all(full_reset_including_setup: bool = True):
+    """Usuwa wszystko z bazy danych. Jeśli full_reset_including_setup=True, czyści także ustawienia /setup."""
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -249,7 +250,10 @@ def reset_database_for_new_season():
             cursor.execute("DELETE FROM free_agents")
             cursor.execute("DELETE FROM clubs")
             cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', 0)")
-            cursor.execute("DELETE FROM settings WHERE key NOT LIKE 'cfg_%'")
+            if full_reset_including_setup:
+                cursor.execute("DELETE FROM settings")
+            else:
+                cursor.execute("DELETE FROM settings WHERE key NOT LIKE 'cfg_%'")
             cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('market_status', 'OPEN')")
             cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('season_initialized', '2026_27')")
             try:
@@ -264,11 +268,81 @@ def reset_database_for_new_season():
 
     sync_persistent_backup()
 
+def reset_clubs():
+    """Usuwa kluby, kontrakty zawodników i wnioski, ale ZACHOWUJE ustawienia /setup i wolnych agentów."""
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM players")
+            cursor.execute("DELETE FROM applications")
+            cursor.execute("DELETE FROM transfer_history")
+            cursor.execute("DELETE FROM clubs")
+            cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', 0)")
+            try:
+                cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('applications', 'transfer_history')")
+            except Exception:
+                pass
+            conn.commit()
+    sync_persistent_backup()
+
+def reset_contracts():
+    """Usuwa wszystkich zawodników, kontrakty, wolnych agentów, wnioski i historię. ZACHOWUJE kluby i zarządy oraz /setup."""
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM players")
+            cursor.execute("DELETE FROM free_agents")
+            cursor.execute("DELETE FROM applications")
+            cursor.execute("DELETE FROM transfer_history")
+            cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', 0)")
+            try:
+                cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('applications', 'transfer_history')")
+            except Exception:
+                pass
+            conn.commit()
+    sync_persistent_backup()
+
+def reset_applications():
+    """Czyści wyłącznie wnioski transferowe i resetuje licznik ticketów do #001."""
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM applications")
+            cursor.execute("INSERT OR REPLACE INTO counters (name, value) VALUES ('ticket_counter', 0)")
+            try:
+                cursor.execute("DELETE FROM sqlite_sequence WHERE name = 'applications'")
+            except Exception:
+                pass
+            conn.commit()
+    sync_persistent_backup()
+
+def reset_market():
+    """Resetuje rynek transferowy: otwiera rynek, kasuje harmonogram i czyści giełdę wolnych agentów."""
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM free_agents")
+            cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('market_status', 'OPEN')")
+            cursor.execute("DELETE FROM settings WHERE key IN ('market_close_at', 'market_open_at')")
+            conn.commit()
+    sync_persistent_backup()
+
+def reset_setup():
+    """Przywraca domyślne ustawienia panelu /setup (usuwa konfigurację cfg_*), zachowując wszystkie kluby i graczy."""
+    with _lock:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM settings WHERE key LIKE 'cfg_%'")
+            conn.commit()
+    sync_persistent_backup()
+
+def reset_database_for_new_season():
     if os.path.exists(LEGACY_JSON_DB):
         try:
             os.remove(LEGACY_JSON_DB)
         except Exception:
             pass
+    return reset_all(full_reset_including_setup=False)
 
 def backup_database_vacuum(target_path: str):
     with get_connection() as conn:

@@ -1,5 +1,6 @@
 import asyncio
 import traceback
+from datetime import datetime
 import discord
 from discord import ui
 import database
@@ -10,7 +11,7 @@ from utils.helpers import (
     clean_tag, is_valid_tag, extract_ids, parse_expiry_date,
     parse_amount, validate_amount_input, is_club_board_or_owner,
     ping_representatives, send_dm, has_open_ticket, safe_thread_name, get_now_warsaw,
-    resolve_player_identity, clean_player_name
+    resolve_player_identity, clean_player_name, is_federation, get_komunikaty_channel
 )
 from views.confirmation import WniosekConfirmView
 from views.application_view import ForumApplicationView
@@ -778,18 +779,76 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
         embed_start.set_footer(text=f"{league_config.league_name()} • Biuro")
         await kanal.send(embed=embed_start)
 
-        # Weryfikacja: wnioskodawca musi być w zarządzie lub właścicielem
         all_clubs = database.get_all_clubs()
-        user_club = None
-        for c in all_clubs:
-            if is_club_board_or_owner(user, c["tag"]):
-                user_club = c["tag"]
-                break
-        if not user_club:
-            await kanal.send(embed=discord.Embed(description="❌ Nie jesteś w zarządzie ani właścicielem żadnego zarejestrowanego klubu.", color=0xe74c3c))
+        if not all_clubs:
+            await kanal.send(embed=discord.Embed(description="❌ W bazie danych nie ma obecnie żadnych zarejestrowanych klubów.", color=0xe74c3c))
             await asyncio.sleep(5); await _safe_delete_channel(kanal); return
 
-        stary_klub = database.get_club(user_club)
+        is_fed = is_federation(user) or (getattr(user, "guild_permissions", None) and user.guild_permissions.administrator)
+
+        user_club = None
+        stary_klub = None
+
+        if is_fed:
+            # Zarząd Federacji / Admin może zarządzać dowolnym klubem
+            club_list_str = "\n".join([f"> • `{c['tag']}` — **{c.get('name', c['tag'])}**" for c in all_clubs[:20]])
+            if len(all_clubs) > 20:
+                club_list_str += f"\n> *...i {len(all_clubs) - 20} innych klubów*"
+
+            embed_fed_select = discord.Embed(
+                title="🏛️ Panel Federacji — Wybór Klubu",
+                description=(
+                    f"Jako **Zarząd Federacji / Administrator** masz uprawnienia do zarządzania dowolnym klubem.\n\n"
+                    f"**Zarejestrowane kluby ({len(all_clubs)}):**\n{club_list_str}\n\n"
+                    f"Podaj **TAG** klubu, którym chcesz zarządzać (lub wpisz `Anuluj`):"
+                ),
+                color=0x3498db
+            )
+            await kanal.send(embed=embed_fed_select)
+
+            while True:
+                fed_tag_in = await _zadaj_pytanie(kanal, user, "Podaj TAG klubu:", client)
+                if fed_tag_in.strip().lower() == "anuluj":
+                    await kanal.send(embed=discord.Embed(description="❌ Anulowano.", color=0x95a5a6))
+                    await asyncio.sleep(2); await _safe_delete_channel(kanal); return
+                t_clean = clean_tag(fed_tag_in)
+                matched = database.get_club(t_clean)
+                if matched:
+                    user_club = t_clean
+                    stary_klub = matched
+                    break
+                await kanal.send(embed=discord.Embed(description=f"❌ Klub o tagu `{t_clean}` nie istnieje w bazie!", color=0xe74c3c))
+        else:
+            # Zwykły użytkownik - sprawdzamy kluby, którymi zarządza
+            user_clubs = [c for c in all_clubs if is_club_board_or_owner(user, c["tag"])]
+            if not user_clubs:
+                await kanal.send(embed=discord.Embed(description="❌ Nie jesteś w zarządzie ani właścicielem żadnego zarejestrowanego klubu.", color=0xe74c3c))
+                await asyncio.sleep(5); await _safe_delete_channel(kanal); return
+
+            if len(user_clubs) == 1:
+                user_club = user_clubs[0]["tag"]
+                stary_klub = user_clubs[0]
+            else:
+                c_list = "\n".join([f"> • `{c['tag']}` — **{c.get('name', c['tag'])}**" for c in user_clubs])
+                embed_multi = discord.Embed(
+                    title="🏛️ Wybierz swój klub",
+                    description=f"Jesteś przypisany do kilku klubów:\n{c_list}\n\nWpisz **TAG** klubu, którym chcesz zarządzać:",
+                    color=0x3498db
+                )
+                await kanal.send(embed=embed_multi)
+                while True:
+                    tag_in = await _zadaj_pytanie(kanal, user, "Wpisz TAG klubu (lub `Anuluj`):", client)
+                    if tag_in.strip().lower() == "anuluj":
+                        await kanal.send(embed=discord.Embed(description="❌ Anulowano.", color=0x95a5a6))
+                        await asyncio.sleep(2); await _safe_delete_channel(kanal); return
+                    t_clean = clean_tag(tag_in)
+                    matched = [c for c in user_clubs if c["tag"] == t_clean]
+                    if matched:
+                        user_club = t_clean
+                        stary_klub = matched[0]
+                        break
+                    await kanal.send(embed=discord.Embed(description=f"❌ Nie zarządzasz klubem o tagu `{t_clean}`.", color=0xe74c3c))
+
         stara_nazwa = stary_klub.get("name", user_club)
         stary_wlasciciel = stary_klub.get("founder_txt") or "Brak"
         stary_zarzad = stary_klub.get("board_txt") or "Brak"
@@ -802,6 +861,117 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
             f"> Zarząd: {stary_zarzad}"
         )
 
+        # Wybór akcji: 1. Edycja danych, 2. Usunięcie klubu
+        embed_action = discord.Embed(
+            title="⚙️ Wybierz Akcję Zarządzania",
+            description=(
+                f"Zarządzasz klubem **{stara_nazwa}** (`{user_club}`). Co chcesz zrobić?\n\n"
+                "> `1` • **Edycja danych klubu** (Nazwa, TAG, Właściciel, Zarząd)\n"
+                "> `2` • **Usunięcie / Likwidacja klubu** (Wykreślenie z ligi i rozwiązanie umów graczy)\n\n"
+                "Wpisz `1`, `2` lub `Anuluj`:"
+            ),
+            color=0x3498db
+        )
+        await kanal.send(embed=embed_action)
+
+        action_choice = None
+        while True:
+            choice_in = await _zadaj_pytanie(kanal, user, "Wybierz opcję (1 lub 2):", client)
+            ch = choice_in.strip().lower()
+            if ch == "anuluj":
+                await kanal.send(embed=discord.Embed(description="❌ Anulowano.", color=0x95a5a6))
+                await asyncio.sleep(2); await _safe_delete_channel(kanal); return
+            if ch in ("1", "2"):
+                action_choice = ch
+                break
+            await kanal.send(embed=discord.Embed(description="❌ Wpisz `1` (Edycja) lub `2` (Usunięcie)!", color=0xe74c3c))
+
+        # ── OPCJA 2: LIKWIDACJA KLUBU ──
+        if action_choice == "2":
+            embed_del_warn = discord.Embed(
+                title="⚠️ Likwidacja Klubu — Ostrzeżenie",
+                description=(
+                    f"Zamierzasz zlikwidować klub **{stara_nazwa}** (`{user_club}`).\n\n"
+                    f"> • Wszyscy zawodnicy tego klubu zostaną **zwolnieni z kontraktów**.\n"
+                    f"> • Klub zostanie **wykreślony** z bazy ligi.\n"
+                    f"> • Role klubowe zostaną usunięte z serwera Discord.\n\n"
+                    f"Aby potwierdzić, wpisz dokładnie: **POTWIERDZAM**\n"
+                    f"*(Wpisanie czegokolwiek innego anuluje proces)*"
+                ),
+                color=0xe74c3c
+            )
+            await kanal.send(embed=embed_del_warn)
+            confirm_input = await _zadaj_pytanie(kanal, user, "Wpisz POTWIERDZAM lub Anuluj:", client)
+            if confirm_input.strip().upper() != "POTWIERDZAM":
+                await kanal.send(embed=discord.Embed(description="❌ Likwidacja klubu została anulowana.", color=0x95a5a6))
+                await asyncio.sleep(2); await _safe_delete_channel(kanal); return
+
+            powod_del = await _zadaj_pytanie(kanal, user, "Podaj powód likwidacji klubu:", client)
+
+            if is_fed:
+                # Federacja / Admin likwiduje klub natychmiastowo
+                r_b_id = stary_klub.get("role_board_id", 0)
+                r_p_id = stary_klub.get("role_player_id", 0)
+                if r_b_id:
+                    r_b = guild.get_role(r_b_id)
+                    if r_b:
+                        try: await r_b.delete(reason=f"Likwidacja klubu {user_club} przez Federację")
+                        except Exception as e: print(f"[Zarządzanie] Błąd usuwania roli zarządu: {e}")
+                if r_p_id:
+                    r_p = guild.get_role(r_p_id)
+                    if r_p:
+                        try: await r_p.delete(reason=f"Likwidacja klubu {user_club} przez Federację")
+                        except Exception as e: print(f"[Zarządzanie] Błąd usuwania roli gracza: {e}")
+
+                database.delete_club(user_club, terminate_players=True)
+
+                kom_channel = await get_komunikaty_channel(client, guild)
+                if kom_channel:
+                    try:
+                        embed_ann = discord.Embed(
+                            title="🏛️ Likwidacja Klubu (FSS)",
+                            description=f"Klub **{stara_nazwa}** (`{user_club}`) został oficjalnie zlikwidowany i wykreślony z rozgrywek Federacji Siatkówki Stołowej.",
+                            color=0xe74c3c
+                        )
+                        embed_ann.add_field(name="Decyzja", value=f"Podjęta przez Zarząd Federacji ({user.mention})", inline=False)
+                        embed_ann.add_field(name="Powód", value=powod_del, inline=False)
+                        embed_ann.set_footer(text=f"{league_config.league_name()} • Oficjalny Komunikat")
+                        await kom_channel.send(embed=embed_ann)
+                    except Exception as e:
+                        print(f"[Zarządzanie] Błąd komunikatu likwidacji: {e}")
+
+                await kanal.send(embed=discord.Embed(
+                    title="✅ Klub Zlikwidowany",
+                    description=f"Klub **{stara_nazwa}** (`{user_club}`) został pomyślnie zlikwidowany, a kontrakty graczy rozwiązane.",
+                    color=0x2ecc71
+                ))
+                await asyncio.sleep(4); await _safe_delete_channel(kanal); return
+            else:
+                # Właściciel składa wniosek na forum
+                embed_del_app = discord.Embed(title=f"🗑️ Wniosek o Likwidację: {user_club}", color=0xe74c3c)
+                embed_del_app.add_field(name="Klub", value=f"`{user_club}` – **{stara_nazwa}**", inline=False)
+                embed_del_app.add_field(name="Wnioskodawca", value=user.mention, inline=True)
+                embed_del_app.add_field(name="Powód", value=powod_del, inline=False)
+                embed_del_app.add_field(name="Status", value="⏳ Oczekuje na decyzję Zarządu Federacji", inline=False)
+                embed_del_app.set_footer(text=f"{league_config.league_name()} • Biuro")
+
+                v = WniosekConfirmView(user.id)
+                await kanal.send(embed=embed_del_app, view=v)
+                await v.wait()
+                if not v.value:
+                    await kanal.send(embed=discord.Embed(description="❌ Wniosek anulowany.", color=0xe74c3c))
+                    await asyncio.sleep(2); await _safe_delete_channel(kanal); return
+
+                app_id = database.create_application(
+                    app_type="USUNIECIE_KLUBU", applicant_id=user.id,
+                    club_name=stara_nazwa, club_tag=user_club, old_club_tag=user_club,
+                    reason=powod_del
+                )
+                await _send_forum_application(guild, kanal, embed_del_app,
+                                               f"[USUNIĘCIE] {user_club} – {stara_nazwa}", app_id)
+                return
+
+        # ── OPCJA 1: EDYCJA DANYCH KLUBU ──
         # 1. Pełna nazwa
         nowa_nazwa_input = await _zadaj_pytanie(kanal, user, f"Nowa pełna nazwa klubu (lub `Bez zmian` by zachować `{stara_nazwa}`):", client)
         nowa_nazwa = stara_nazwa if nowa_nazwa_input.lower() == "bez zmian" else nowa_nazwa_input.strip()

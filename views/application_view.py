@@ -47,6 +47,8 @@ def _reconstruct_app_from_message(message: discord.Message, app_id: int, guild: 
         app_type = "REJESTRACJA_KLUBU"
     elif "ZARZĄDZANIE" in title.upper() or "ZARZADZANIE" in title.upper() or "AKTUALIZACJA" in title.upper():
         app_type = "ZARZADZANIE_KLUBU"
+    elif "USUNIĘCIE" in title.upper() or "USUNIECIE" in title.upper() or "LIKWIDACJA" in title.upper():
+        app_type = "USUNIECIE_KLUBU"
 
     if not app_type:
         return None
@@ -146,7 +148,7 @@ def _reconstruct_app_from_message(message: discord.Message, app_id: int, guild: 
         "type": app_type,
         "applicant_id": None,
         "club_name": club_name,
-        "club_tag": target_club if app_type == "REJESTRACJA_KLUBU" else None,
+        "club_tag": target_club if app_type in ("REJESTRACJA_KLUBU", "USUNIECIE_KLUBU", "ZARZADZANIE_KLUBU") else None,
         "player_name": player_name or f"Zawodnik #{app_id}",
         "player_discord_id": player_dc_id,
         "target_club": target_club,
@@ -156,8 +158,8 @@ def _reconstruct_app_from_message(message: discord.Message, app_id: int, guild: 
         "expires_at": expires_at or "30.06.2027",
         "is_buyout": 0,
         "status": "PROCESSING",
-        "thread_id": message.channel.id if hasattr(message.channel, "id") else None,
-        "message_id": message.id
+        "thread_id": message.channel.id if hasattr(message, "channel") and hasattr(message.channel, "id") and isinstance(message.channel.id, int) else None,
+        "message_id": message.id if hasattr(message, "id") and isinstance(message.id, int) else None
     }
     database.restore_application(app_data)
     return app_data
@@ -218,15 +220,15 @@ class ForumApplicationView(ui.View):
                 btn.callback = self.cb_source_agree
             self.add_item(btn)
 
-        # ── Odrzuć ofertę (tylko dla typów niebędących rebrandingiem/rejestracji) ──
-        if app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU", "ZARZADZANIE_KLUBU", "ROZWIAZANIE_DYSCYPLINARNE"):
+        # ── Odrzuć ofertę (tylko dla typów niebędących rebrandingiem/rejestracji/usunięcia) ──
+        if app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU", "ZARZADZANIE_KLUBU", "ROZWIAZANIE_DYSCYPLINARNE", "USUNIECIE_KLUBU"):
             btn_rp = ui.Button(label="❌ Odrzuć ofertę", style=discord.ButtonStyle.danger,
                                custom_id=f"app:{self.app_id}:party_reject")
             btn_rp.callback = self.cb_party_reject
             self.add_item(btn_rp)
 
         # ── Historia transferów (tylko dla wniosków dot. gracza) ──
-        if app.get("player_name") and app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU", "ZARZADZANIE_KLUBU"):
+        if app.get("player_name") and app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU", "ZARZADZANIE_KLUBU", "USUNIECIE_KLUBU"):
             btn_h = ui.Button(label="📜 Poprzednie kluby", style=discord.ButtonStyle.secondary,
                               custom_id=f"app:{self.app_id}:history")
             btn_h.callback = self.cb_history
@@ -852,6 +854,41 @@ class ForumApplicationView(ui.View):
                     )
                 except Exception as e:
                     print(f"[Fed] Błąd ogłoszenia aktualizacji klubu: {e}")
+
+        # ─── USUNIĘCIE / LIKWIDACJA KLUBU ───
+        elif app_type == "USUNIECIE_KLUBU":
+            club_tag = clean_tag(app.get("club_tag") or app.get("old_club_tag") or app.get("target_club"))
+            c_info = database.get_club(club_tag)
+            c_nazwa = c_info.get("name", club_tag) if c_info else (app.get("club_name") or club_tag)
+
+            if c_info:
+                r_board = guild.get_role(c_info.get("role_board_id", 0))
+                r_player = guild.get_role(c_info.get("role_player_id", 0))
+                if r_board:
+                    try: await r_board.delete(reason=f"Likwidacja klubu {club_tag}")
+                    except Exception as e: print(f"[Fed] Błąd usuwania roli zarządu {club_tag}: {e}")
+                if r_player:
+                    try: await r_player.delete(reason=f"Likwidacja klubu {club_tag}")
+                    except Exception as e: print(f"[Fed] Błąd usuwania roli zawodnika {club_tag}: {e}")
+
+            database.delete_club(club_tag, terminate_players=True)
+            database.set_application_status(self.app_id, "ACCEPTED")
+
+            embed = interaction.message.embeds[0]
+            embed.color = 0xe74c3c
+            embed.title = f"✅ LIKWIDACJA KLUBU: `{club_tag}` – {c_nazwa}"
+            embed.add_field(name="Decyzja Federacji",
+                            value=f"Klub został zlikwidowany przez {interaction.user.mention}.", inline=False)
+            await interaction.message.edit(embed=embed, view=None)
+
+            if kom_channel:
+                try:
+                    await kom_channel.send(
+                        f"🏛️ **LIKWIDACJA KLUBU (FSS):** Klub **{c_nazwa}** (`{club_tag}`) został oficjalnie rozwiązany i wykreślony z rozgrywek Federacji Siatkówki Stołowej.",
+                        allowed_mentions=discord.AllowedMentions.none()
+                    )
+                except Exception as e:
+                    print(f"[Fed] Błąd ogłoszenia likwidacji klubu: {e}")
 
         # ─── Archiwizacja wątku ───
         try:

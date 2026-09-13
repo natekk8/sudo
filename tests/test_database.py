@@ -142,3 +142,83 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(database.get_next_ticket_id(), "001")
         self.assertTrue(database.is_market_open())
 
+    def test_delete_club(self):
+        database.add_club("DEL", "Delete Club", 10, 20)
+        database.add_or_update_player("Player Del", 999, "DEL", None, "Brak", "Professional", "2026-12-31")
+        self.assertIsNotNone(database.get_club("DEL"))
+        self.assertIsNotNone(database.get_player("Player Del"))
+
+        deleted = database.delete_club("DEL", terminate_players=True)
+        self.assertTrue(deleted)
+        self.assertIsNone(database.get_club("DEL"))
+        self.assertIsNone(database.get_player("Player Del"))
+
+        # Ponowne usunięcie powinno zwrócić False
+        self.assertFalse(database.delete_club("DEL"))
+
+    def test_reset_all_full_clears_setup(self):
+        database.set_setting("cfg_max_players", "7")
+        database.add_club("FCB", "Barcelona", 1, 2)
+        database.reset_all(full_reset_including_setup=True)
+        self.assertIsNone(database.get_setting("cfg_max_players"))
+        self.assertIsNone(database.get_club("FCB"))
+        self.assertTrue(database.is_market_open())
+
+    def test_reset_clubs_preserves_free_agents(self):
+        database.add_club("KLU", "Klub", 1, 2)
+        database.add_or_update_player("Player 1", 101, "KLU", None, "Brak", "Professional", "2026-12-31")
+        database.register_free_agent(202, "FreeAgent")
+        database.set_setting("cfg_max_players", "4")
+
+        database.reset_clubs()
+
+        self.assertIsNone(database.get_club("KLU"))
+        self.assertIsNone(database.get_player("Player 1"))
+        self.assertTrue(database.is_free_agent(202))
+        self.assertEqual(database.get_setting("cfg_max_players"), "4")
+
+    def test_reset_contracts_preserves_clubs(self):
+        database.add_club("KLU", "Klub", 1, 2)
+        database.add_or_update_player("Player 1", 101, "KLU", None, "Brak", "Professional", "2026-12-31")
+        database.register_free_agent(202, "FreeAgent")
+
+        database.reset_contracts()
+
+        self.assertIsNotNone(database.get_club("KLU"))
+        self.assertIsNone(database.get_player("Player 1"))
+        self.assertFalse(database.is_free_agent(202))
+
+    def test_reset_applications_only(self):
+        database.add_club("KLU", "Klub", 1, 2)
+        app_id = database.create_application("PODPISANIE", 101)
+        database.set_application_message(app_id, 100, 200)
+        self.assertEqual(len(database.get_pending_applications()), 1)
+
+        database.reset_applications()
+
+        self.assertEqual(len(database.get_pending_applications()), 0)
+        self.assertIsNone(database.get_application(app_id))
+        self.assertIsNotNone(database.get_club("KLU"))
+        self.assertEqual(database.get_next_ticket_id(), "001")
+
+    def test_reset_market_only(self):
+        database.register_free_agent(202, "FreeAgent")
+        database.set_setting("market_status", "CLOSED")
+        database.set_setting("market_close_at", "2026-12-31 18:00:00")
+
+        database.reset_market()
+
+        self.assertFalse(database.is_free_agent(202))
+        self.assertTrue(database.is_market_open())
+        self.assertIsNone(database.get_setting("market_close_at"))
+
+    def test_reset_setup_only(self):
+        database.set_setting("cfg_max_players", "8")
+        database.add_club("KLU", "Klub", 1, 2)
+
+        database.reset_setup()
+
+        self.assertIsNone(database.get_setting("cfg_max_players"))
+        self.assertIsNotNone(database.get_club("KLU"))
+
+

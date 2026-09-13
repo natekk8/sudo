@@ -367,48 +367,112 @@ class TestAsyncApplicationView(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(p["club_tag"], "FCB")
         interaction.followup.send.assert_awaited()
 
-    async def test_execute_restore_from_discord(self):
-        from unittest.mock import MagicMock
-        from cogs.admin import execute_restore_from_discord
+    async def test_execute_accept_usuniecie_klubu(self):
+        import discord
+        from unittest.mock import AsyncMock, MagicMock
+        from views.application_view import ForumApplicationView
+        from config import ROLE_FEDERACJA_ID
 
-        guild = MagicMock()
+        # Dodaj klub i gracza
+        database.add_club("LIV", "Liverpool FC", 111, 222)
+        database.add_or_update_player("Mo Salah", 9999, "LIV", None, "Brak", "Professional", "2026-12-31")
+        self.assertIsNotNone(database.get_club("LIV"))
+        self.assertIsNotNone(database.get_player("Mo Salah"))
+
+        app_id = database.create_application(
+            app_type="USUNIECIE_KLUBU", applicant_id=1234,
+            club_name="Liverpool FC", club_tag="LIV", old_club_tag="LIV",
+            reason="Likwidacja sekcji"
+        )
+
+        view = ForumApplicationView(app_id)
+        interaction = MagicMock()
+        fed_role = MagicMock()
+        fed_role.id = ROLE_FEDERACJA_ID
+        interaction.user.roles = [fed_role]
+        interaction.user.mention = "<@111>"
+        interaction.channel = MagicMock()
+        interaction.channel.edit = AsyncMock()
+        interaction.client.get_channel.return_value.send = AsyncMock()
+        interaction.client.fetch_user = AsyncMock()
+
+        msg = MagicMock()
+        embed = discord.Embed(title="🗑️ Wniosek o Usunięcie Klubu: LIV")
+        embed.add_field(name="Klub", value="`LIV` – Liverpool FC")
+        embed.add_field(name="Powód", value="Likwidacja sekcji")
+        embed.add_field(name="Status", value="Oczekuje na decyzję...")
+        msg.embeds = [embed]
+        msg.edit = AsyncMock()
+
+        interaction.message = msg
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+
         r_board = MagicMock()
-        r_board.name = "⚽・LAZ - Zarząd"
-        r_board.id = 1111
-
+        r_board.delete = AsyncMock()
         r_player = MagicMock()
-        r_player.name = "⚽・LAZ - Zawodnik"
-        r_player.id = 2222
+        r_player.delete = AsyncMock()
 
-        guild.roles = [r_board, r_player]
+        def get_role_mock(role_id):
+            if role_id == 111: return r_board
+            if role_id == 222: return r_player
+            return None
+        interaction.guild.get_role.side_effect = get_role_mock
 
-        m_board = MagicMock()
-        m_board.id = 3333
-        m_board.display_name = "Prezes Jan"
-        m_board.roles = [r_board]
+        await view.cb_fed_accept(interaction)
 
-        m_player = MagicMock()
-        m_player.id = 4444
-        m_player.display_name = "Gracz Piotr"
-        m_player.roles = [r_player]
+        # Weryfikacja: klub i kontrakty graczy zostały usunięte
+        self.assertIsNone(database.get_club("LIV"))
+        self.assertIsNone(database.get_player("Mo Salah"))
+        app = database.get_application(app_id)
+        self.assertEqual(app["status"], "ACCEPTED")
+        r_board.delete.assert_awaited()
+        r_player.delete.assert_awaited()
 
-        guild.members = [m_board, m_player]
-        guild.channels = []
-        guild.text_channels = []
+    def test_federation_override_is_club_board_or_owner(self):
+        from unittest.mock import MagicMock
+        from utils.helpers import is_club_board_or_owner
+        from config import ROLE_FEDERACJA_ID
 
-        stats = await execute_restore_from_discord(guild)
+        database.add_club("CHE", "Chelsea", 10, 20, founder_txt="<@555>", board_txt="<@666>")
 
-        self.assertEqual(len(stats["clubs"]), 1)
-        self.assertEqual(stats["clubs"][0]["tag"], "LAZ")
-        self.assertEqual(len(stats["players"]), 1)
-        self.assertEqual(stats["players"][0]["name"], "Gracz Piotr")
+        # Zwykły członek bez ról nie ma praw do CHE
+        regular = MagicMock()
+        regular.id = 999
+        regular.roles = []
+        regular.guild_permissions.administrator = False
+        self.assertFalse(is_club_board_or_owner(regular, "CHE"))
 
-        c = database.get_club("LAZ")
-        self.assertIsNotNone(c)
-        self.assertEqual(c["role_board_id"], 1111)
-        self.assertEqual(c["role_player_id"], 2222)
+        # Członek Zarządu Federacji MA pełne prawo do zarządzania dowolnym klubem
+        fed_member = MagicMock()
+        fed_member.id = 888
+        fed_role = MagicMock()
+        fed_role.id = ROLE_FEDERACJA_ID
+        fed_member.roles = [fed_role]
+        fed_member.guild_permissions.administrator = False
+        self.assertTrue(is_club_board_or_owner(fed_member, "CHE"))
 
-        p = database.get_player("Gracz Piotr")
-        self.assertIsNotNone(p)
-        self.assertEqual(p["club_tag"], "LAZ")
-        self.assertEqual(p["discord_id"], 4444)
+        # Administrator także ma pełne prawo
+        admin_member = MagicMock()
+        admin_member.id = 777
+        admin_member.roles = []
+        admin_member.guild_permissions.administrator = True
+        self.assertTrue(is_club_board_or_owner(admin_member, "CHE"))
+
+    def test_reconstruct_app_usuniecie_klubu(self):
+        import discord
+        from unittest.mock import MagicMock
+        from views.application_view import _reconstruct_app_from_message
+
+        msg = MagicMock()
+        msg.id = 9999
+        msg.channel.id = 555
+        embed = discord.Embed(title="🗑️ USUNIĘCIE KLUBU: ARS – Arsenal")
+        embed.add_field(name="Klub", value="`ARS`")
+        embed.add_field(name="Powód", value="Brak aktywności")
+        msg.embeds = [embed]
+
+        app = _reconstruct_app_from_message(msg, 950, MagicMock())
+        self.assertIsNotNone(app)
+        self.assertEqual(app["type"], "USUNIECIE_KLUBU")
+        self.assertEqual(app["club_tag"], "ARS")

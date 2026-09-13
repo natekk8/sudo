@@ -10,27 +10,113 @@ import utils.league_config as league_config
 
 
 def _is_admin(user) -> bool:
-    return getattr(user, 'guild_permissions', None) and user.guild_permissions.administrator or is_federation(user)
+    return (getattr(user, 'guild_permissions', None) and user.guild_permissions.administrator) or is_federation(user)
 
 
 class AdminCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._register_slash_commands()
 
-    # ── Prefix: !reset ────────────────────────────────────────────────────────
+    def _register_slash_commands(self):
+        reset_group = app_commands.Group(name="reset", description="[Admin] Narzędzia resetowania bazy danych i ligi")
+
+        @reset_group.command(name="wszystko", description="[Admin] Usuwa absolutnie wszystko z bazy, łącznie z panelem /setup")
+        async def reset_wszystko(interaction: discord.Interaction):
+            if not _is_admin(interaction.user):
+                return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
+            database.reset_all(full_reset_including_setup=True)
+            await interaction.response.send_message(embed=_build_reset_embed("wszystko"))
+
+        @reset_group.command(name="kluby", description="[Admin] Resetuje kluby, powiązane kontrakty i wnioski (zachowuje /setup i giełdę)")
+        async def reset_kluby(interaction: discord.Interaction):
+            if not _is_admin(interaction.user):
+                return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
+            database.reset_clubs()
+            await interaction.response.send_message(embed=_build_reset_embed("kluby"))
+
+        @reset_group.command(name="kontrakty", description="[Admin] Resetuje kontrakty zawodników i wnioski (zachowuje kluby i /setup)")
+        async def reset_kontrakty(interaction: discord.Interaction):
+            if not _is_admin(interaction.user):
+                return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
+            database.reset_contracts()
+            await interaction.response.send_message(embed=_build_reset_embed("kontrakty"))
+
+        @reset_group.command(name="wnioski", description="[Admin] Czyści wnioski transferowe i resetuje licznik ticketów do #001")
+        async def reset_wnioski(interaction: discord.Interaction):
+            if not _is_admin(interaction.user):
+                return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
+            database.reset_applications()
+            await interaction.response.send_message(embed=_build_reset_embed("wnioski"))
+
+        @reset_group.command(name="rynek", description="[Admin] Otwiera rynek, kasuje zaplanowany harmonogram i czyści giełdę graczy")
+        async def reset_rynek(interaction: discord.Interaction):
+            if not _is_admin(interaction.user):
+                return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
+            database.reset_market()
+            await interaction.response.send_message(embed=_build_reset_embed("rynek"))
+
+        @reset_group.command(name="setup", description="[Admin] Przywraca domyślne ustawienia panelu /setup (zachowuje kluby i graczy)")
+        async def reset_setup(interaction: discord.Interaction):
+            if not _is_admin(interaction.user):
+                return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
+            database.reset_setup()
+            await interaction.response.send_message(embed=_build_reset_embed("setup"))
+
+        self.reset_slash_group = reset_group
+
+    async def cog_load(self):
+        self.bot.tree.add_command(self.reset_slash_group)
+
+    async def cog_unload(self):
+        self.bot.tree.remove_command("reset")
+
+    # ── Prefix: !reset [zakres] ───────────────────────────────────────────────
     @commands.command(name='reset', aliases=['reset_sezon', 'reset_bazy', 'reset_ligi'])
-    async def cmd_reset(self, ctx):
-        """Resetuje całą bazę danych ligi na nowy sezon (z zachowaniem konfiguracji /setup)."""
-        if not (ctx.author.guild_permissions.administrator or is_federation(ctx.author)):
+    async def cmd_reset(self, ctx, zakres: str = "wszystko"):
+        """
+        Resetuje wybrane dane ligi:
+        !reset wszystko  -> Czyści absolutnie wszystko (łącznie z konfiguracją /setup)
+        !reset kluby     -> Czyści kluby, powiązane kontrakty i wnioski (zachowuje /setup)
+        !reset kontrakty -> Czyści kontrakty i zawodników (zachowuje kluby i /setup)
+        !reset wnioski   -> Czyści tylko wnioski i resetuje licznik ticketów #001
+        !reset rynek     -> Otwiera rynek, usuwa harmonogram i czyści giełdę
+        !reset setup     -> Przywraca domyślne ustawienia /setup (zachowuje kluby/graczy)
+        """
+        if not _is_admin(ctx.author):
             return await ctx.reply("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.")
-        database.reset_database_for_new_season()
-        await ctx.reply(embed=_build_reset_embed())
+
+        z = zakres.lower().strip()
+        if z in ("wszystko", "all", "calosc"):
+            database.reset_all(full_reset_including_setup=True)
+            await ctx.reply(embed=_build_reset_embed("wszystko"))
+        elif z in ("kluby", "clubs", "druzyny"):
+            database.reset_clubs()
+            await ctx.reply(embed=_build_reset_embed("kluby"))
+        elif z in ("kontrakty", "zawodnicy", "gracze", "contracts", "players"):
+            database.reset_contracts()
+            await ctx.reply(embed=_build_reset_embed("kontrakty"))
+        elif z in ("wnioski", "tickety", "applications"):
+            database.reset_applications()
+            await ctx.reply(embed=_build_reset_embed("wnioski"))
+        elif z in ("rynek", "market", "gielda"):
+            database.reset_market()
+            await ctx.reply(embed=_build_reset_embed("rynek"))
+        elif z in ("setup", "panel", "config"):
+            database.reset_setup()
+            await ctx.reply(embed=_build_reset_embed("setup"))
+        else:
+            await ctx.reply(
+                "❌ Nieznany zakres resetu!\n"
+                "Dostępne opcje: `!reset wszystko`, `!reset kluby`, `!reset kontrakty`, "
+                "`!reset wnioski`, `!reset rynek`, `!reset setup`."
+            )
 
     # ── Prefix: !backup_db ────────────────────────────────────────────────────
     @commands.command(name='backup_db')
     async def cmd_backup_db(self, ctx):
         """Tworzy kopię zapasową bazy SQLite i wysyła plik."""
-        if not (ctx.author.guild_permissions.administrator or is_federation(ctx.author)):
+        if not _is_admin(ctx.author):
             return await ctx.reply("❌ Brak uprawnień.")
         temp_fd, temp_path = tempfile.mkstemp(suffix=".db", prefix="liga_backup_")
         os.close(temp_fd)
@@ -53,7 +139,7 @@ class AdminCog(commands.Cog):
     @commands.command(name='db_stats')
     async def cmd_db_stats(self, ctx):
         """Statystyki pliku bazy SQLite."""
-        if not (ctx.author.guild_permissions.administrator or is_federation(ctx.author)):
+        if not _is_admin(ctx.author):
             return await ctx.reply("❌ Brak uprawnień.")
         stats = database.get_db_file_stats()
         embed = discord.Embed(title="🗄️ Statystyki bazy SQLite", color=0x2b2d31)
@@ -69,187 +155,115 @@ class AdminCog(commands.Cog):
         ), inline=False)
         await ctx.reply(embed=embed)
 
-    # ── Prefix: !przywroc_z_discorda ──────────────────────────────────────────
-    @commands.command(name='przywroc_z_discorda', aliases=['odtworz_lige', 'przywroc_baze', 'sync_discord'])
-    async def cmd_restore(self, ctx):
-        """Automatycznie odtwarza kluby, składy i ustawienia bezpośrednio z ról na serwerze Discord."""
-        if not (ctx.author.guild_permissions.administrator or is_federation(ctx.author)):
-            return await ctx.reply("❌ Brak uprawnień. Tylko Zarząd Federacji / Administrator.")
-        msg = await ctx.reply("🔄 **Rozpoczynam skanowanie serwera Discord i odzyskiwanie danych ligi...**")
-        stats = await execute_restore_from_discord(ctx.guild)
-        await msg.edit(content=None, embed=_build_restore_embed(stats))
 
-    # ── Slash: /reset ──────────────────────────────────────────────────────────
-    @app_commands.command(name='reset', description='[Admin] Resetuj bazę danych ligi na nowy sezon')
-    async def slash_reset(self, interaction: discord.Interaction):
-        if not _is_admin(interaction.user):
-            return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
-        database.reset_database_for_new_season()
-        await interaction.response.send_message(embed=_build_reset_embed())
+def _build_reset_embed(zakres: str) -> discord.Embed:
+    org_name = league_config.league_name()
+    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
 
-    # ── Slash: /przywroc_z_discorda ───────────────────────────────────────────
-    @app_commands.command(name='przywroc_z_discorda', description='[Admin] Przywróć wszystkie kluby, graczy i ustawienia bezpośrednio z ról Discorda')
-    async def slash_restore(self, interaction: discord.Interaction):
-        if not _is_admin(interaction.user):
-            return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
-        await interaction.response.defer()
-        stats = await execute_restore_from_discord(interaction.guild)
-        await interaction.followup.send(embed=_build_restore_embed(stats))
-
-
-async def execute_restore_from_discord(guild: discord.Guild) -> dict:
-    import re
-    recovered_clubs = []
-    recovered_players = []
-    recovered_settings = []
-
-    board_pattern = re.compile(r"^(?:⚽[・\s\-]*)?([A-Za-z0-9]{2,5})\s*-\s*Zarząd", re.IGNORECASE)
-    player_pattern = re.compile(r"^(?:⚽[・\s\-]*)?([A-Za-z0-9]{2,5})\s*-\s*Zawodnik", re.IGNORECASE)
-
-    club_candidates = {}
-    for role in guild.roles:
-        m_board = board_pattern.match(role.name)
-        if m_board:
-            tag = m_board.group(1).upper()
-            club_candidates.setdefault(tag, {})["board_role"] = role
-            continue
-        m_player = player_pattern.match(role.name)
-        if m_player:
-            tag = m_player.group(1).upper()
-            club_candidates.setdefault(tag, {})["player_role"] = role
-
-    for tag, r_dict in club_candidates.items():
-        r_board = r_dict.get("board_role")
-        r_player = r_dict.get("player_role")
-        if not r_board or not r_player:
-            continue
-
-        board_members = [m for m in guild.members if r_board in m.roles]
-        rep_dc = board_members[0].id if board_members else None
-        board_ids = [m.id for m in board_members]
-        founder_txt = f"<@{rep_dc}>" if rep_dc else "Brak"
-        board_txt = ", ".join(f"<@{uid}>" for uid in board_ids) if board_ids else "Brak"
-
-        existing = database.get_club(tag)
-        c_name = existing.get("name") if existing else f"Klub {tag}"
-
-        database.add_club(
-            tag=tag,
-            name=c_name,
-            role_board_id=r_board.id,
-            role_player_id=r_player.id,
-            reprezentant_dc=rep_dc,
-            founder_txt=founder_txt,
-            board_txt=board_txt,
-            board_ids=board_ids
+    if zakres == "wszystko":
+        embed = discord.Embed(
+            title="💥 Pełny Reset Ligi (Wszystko)",
+            description="> Baza danych została całkowicie wyczyszczona łącznie z panelem `/setup`.",
+            color=0xe74c3c,
+            timestamp=datetime.utcnow()
         )
-        recovered_clubs.append({
-            "tag": tag,
-            "name": c_name,
-            "board_count": len(board_members)
-        })
+        embed.add_field(name="📋 Co wyczyszczono", value=(
+            "> • `clubs` (wszystkie kluby i zarządy)\n"
+            "> • `players` (wszystkie kontrakty i gracze)\n"
+            "> • `applications` oraz licznik ticketów → `#001`\n"
+            "> • `transfer_history` oraz `free_agents`\n"
+            "> • **Konfiguracja `/setup`** (przywrócono domyślne)"
+        ), inline=False)
+        embed.add_field(name="🔄 Rynek Transferowy", value="> Ustawiono jako **OTWARTY**", inline=False)
 
-        club_players = [m for m in guild.members if r_player in m.roles]
-        for p in club_players:
-            database.add_or_update_player(
-                name=p.display_name,
-                discord_id=p.id,
-                club_tag=tag,
-                parent_club_tag=tag,
-                clause="Brak",
-                contract_type="ODZYSKANY",
-                expires_at="30.06.2027"
-            )
-            recovered_players.append({
-                "name": p.display_name,
-                "discord_id": p.id,
-                "club_tag": tag
-            })
+    elif zakres == "kluby":
+        embed = discord.Embed(
+            title="🏛️ Reset Klubów",
+            description="> Pomyślnie zresetowano wszystkie kluby i powiązane z nimi kontrakty.",
+            color=0xe67e22,
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="📋 Co wyczyszczono", value=(
+            "> • `clubs` (wszystkie kluby)\n"
+            "> • `players` (kontrakty zawodników w klubach)\n"
+            "> • `applications` (wszystkie wnioski)\n"
+            "> • `transfer_history` (historia transferów)\n"
+            "> • Licznik ticketów → `#001`"
+        ), inline=False)
+        embed.add_field(name="🛡️ Zachowano", value=(
+            "> • Konfiguracja panelu `/setup` (**Nienaruszona**)\n"
+            "> • Giełda wolnych agentów (**Nienaruszona**)"
+        ), inline=False)
 
-    # Odnajdź brakujące konfiguracje
-    if not league_config.channel_forum_id():
-        for ch in guild.channels:
-            if ch.type == discord.ChannelType.forum and any(w in ch.name.lower() for w in ["wniosk", "transfer", "biuro"]):
-                league_config.set_config("cfg_channel_forum", str(ch.id))
-                recovered_settings.append(f"Forum: #{ch.name}")
-                break
+    elif zakres == "kontrakty":
+        embed = discord.Embed(
+            title="👤 Reset Kontraktów i Zawodników",
+            description="> Pomyślnie wyczyszczono kontrakty, zawodników oraz giełdę wolnych agentów.",
+            color=0xf39c12,
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="📋 Co wyczyszczono", value=(
+            "> • `players` (wszystkie aktywne kontrakty)\n"
+            "> • `free_agents` (giełda wolnych agentów)\n"
+            "> • `applications` oraz licznik ticketów → `#001`\n"
+            "> • `transfer_history`"
+        ), inline=False)
+        embed.add_field(name="🛡️ Zachowano", value=(
+            "> • Wszystkie zarejestrowane kluby i ich zarządy (**Nienaruszone**)\n"
+            "> • Konfiguracja panelu `/setup` (**Nienaruszona**)"
+        ), inline=False)
 
-    if not league_config.channel_komunikaty_id():
-        for ch in guild.text_channels:
-            if any(w in ch.name.lower() for w in ["komunikat", "ogloszen", "news"]):
-                league_config.set_config("cfg_channel_komunikaty", str(ch.id))
-                recovered_settings.append(f"Komunikaty: #{ch.name}")
-                break
+    elif zakres == "wnioski":
+        embed = discord.Embed(
+            title="📄 Reset Wniosków Transferowych",
+            description="> Wyczyszczono historię wniosków oraz zresetowano numerację ticketów.",
+            color=0x3498db,
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="📋 Co wyczyszczono", value=(
+            "> • `applications` (tabela wniosków)\n"
+            "> • Licznik ticketów zresetowany do: `#001`"
+        ), inline=False)
+        embed.add_field(name="🛡️ Zachowano", value=(
+            "> • Kluby i zawodnicy (**Bez zmian**)\n"
+            "> • Ustawienia panelu `/setup` (**Bez zmian**)"
+        ), inline=False)
 
-    if not league_config.role_federacja_id():
-        for r in guild.roles:
-            if any(w in r.name.lower() for w in ["federacj", "zarząd federacji", "fss"]):
-                league_config.set_config("cfg_role_federacja", str(r.id))
-                recovered_settings.append(f"Rola Federacji: @{r.name}")
-                break
+    elif zakres == "rynek":
+        embed = discord.Embed(
+            title="🔄 Reset Rynku Transferowego",
+            description="> Zresetowano status rynku oraz wyczyszczono giełdę graczy.",
+            color=0x2ecc71,
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="📋 Zmiany", value=(
+            "> • Status rynku: **OTWARTY**\n"
+            "> • Zaplanowany harmonogram: **Usunięty**\n"
+            "> • Giełda wolnych agentów: **Wyczyszczona**"
+        ), inline=False)
+        embed.add_field(name="🛡️ Zachowano", value=(
+            "> • Wszystkie kluby i kontrakty zawodników (**Bez zmian**)\n"
+            "> • Ustawienia panelu `/setup` (**Bez zmian**)"
+        ), inline=False)
 
-    database.sync_persistent_backup()
+    elif zakres == "setup":
+        embed = discord.Embed(
+            title="⚙️ Reset Konfiguracji /setup",
+            description="> Przywrócono domyślne ustawienia panelu administracyjnego.",
+            color=0x9b59b6,
+            timestamp=datetime.utcnow()
+        )
+        embed.add_field(name="📋 Zmiany", value=(
+            "> • Usunięto niestandardowe ID kanałów i ról\n"
+            "> • Przywrócono domyślny limit: **3 graczy**\n"
+            "> • Przywrócono domyślne etykiety ligi"
+        ), inline=False)
+        embed.add_field(name="🛡️ Zachowano", value=(
+            "> • Wszystkie kluby i zarządy (**Nienaruszone**)\n"
+            "> • Wszyscy zawodnicy i kontrakty (**Nienaruszone**)"
+        ), inline=False)
 
-    return {
-        "clubs": recovered_clubs,
-        "players": recovered_players,
-        "settings": recovered_settings
-    }
-
-
-def _build_restore_embed(stats: dict) -> discord.Embed:
-    org_name = league_config.league_name()
-    embed = discord.Embed(
-        title="♻️ Baza Danych Przywrócona z Discorda",
-        description="> Przeskanowano role serwera i pomyślnie odtworzono strukturę ligi w SQLite.",
-        color=0x2ecc71,
-        timestamp=datetime.utcnow()
-    )
-
-    clubs = stats.get("clubs", [])
-    if clubs:
-        c_lines = [f"> • **{c['tag']}** ({c['name']}) · Zarząd: {c['board_count']} os." for c in clubs]
-        embed.add_field(name=f"🏛️ Odzyskane Kluby ({len(clubs)})", value="\n".join(c_lines[:15]), inline=False)
-    else:
-        embed.add_field(name="🏛️ Odzyskane Kluby", value="> Brak ról klubowych o schemacie `⚽・{TAG} - Zarząd`", inline=False)
-
-    players = stats.get("players", [])
-    if players:
-        p_lines = [f"> • **{p['name']}** ➔ `{p['club_tag']}`" for p in players]
-        embed.add_field(name=f"👤 Odzyskani Zawodnicy ({len(players)})", value="\n".join(p_lines[:20]), inline=False)
-    else:
-        embed.add_field(name="👤 Odzyskani Zawodnicy", value="> Brak graczy z rolami `⚽・{TAG} - Zawodnik`", inline=False)
-
-    settings = stats.get("settings", [])
-    if settings:
-        embed.add_field(name="⚙️ Zsynchronizowane Ustawienia", value="\n".join(f"> • {s}" for s in settings), inline=False)
-
-    embed.add_field(name="🛡️ Trwałość Bazy", value="> Dane zostały zsynchronizowane z plikiem `liga_persistent.db`.", inline=False)
-    embed.set_footer(text=f"{org_name} • Przywracanie")
-    return embed
-
-
-def _build_reset_embed() -> discord.Embed:
-    org_name = league_config.league_name()
-    mx = league_config.max_players()
-    embed = discord.Embed(
-        title="🏆 Liga Zresetowana",
-        description="> Baza danych wyczyszczona z powodzeniem. Można rejestrować kluby i zawodników.",
-        color=0x2ecc71,
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(name="📋 Co wyczyszczono", value=(
-        "> • `clubs` · `players` · `applications`\n"
-        "> • `transfer_history` · `free_agents`\n"
-        "> • Licznik ticketów → `#001`\n"
-        "> • Rynek transferowy → **OTWARTY**"
-    ), inline=False)
-    embed.add_field(name="⚙️ Zachowana konfiguracja (/setup)", value=(
-        f"> • Max graczy w klubie: **{mx}**\n"
-        "> • ID kanałów i ról: **Bez zmian**\n"
-        f"> • Organizacja: **{org_name}**"
-    ), inline=False)
-    embed.set_footer(text=f"{org_name} • {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    embed.set_footer(text=f"{org_name} • {now_str}")
     return embed
 
 

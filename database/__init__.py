@@ -1,6 +1,7 @@
 from database.core import (init_db, get_connection, reset_database_for_new_season,
+    reset_all, reset_clubs, reset_contracts, reset_applications, reset_market, reset_setup,
     backup_database_vacuum, get_db_file_stats, get_league_stats, sync_persistent_backup, _lock)
-from database.clubs import add_club, get_club, get_all_clubs, update_club_full, rebrand_club
+from database.clubs import add_club, get_club, get_all_clubs, update_club_full, rebrand_club, delete_club
 from database.players import (add_or_update_player, get_player, get_player_by_discord_id,
     is_player_under_contract, terminate_player_contract, extend_player_contract,
     get_all_players, get_club_player_count, get_club_players, delete_player,
@@ -16,9 +17,10 @@ from database.settings import (get_setting, set_setting, delete_setting, get_nex
     is_market_open, set_market_status, get_market_state)
 
 __all__ = [
-    'init_db', 'get_connection', 'reset_database_for_new_season', 'backup_database_vacuum',
-    'get_db_file_stats', 'get_league_stats', 'sync_persistent_backup', '_lock',
-    'add_club', 'get_club', 'get_all_clubs', 'update_club_full', 'rebrand_club',
+    'init_db', 'get_connection', 'reset_database_for_new_season',
+    'reset_all', 'reset_clubs', 'reset_contracts', 'reset_applications', 'reset_market', 'reset_setup',
+    'backup_database_vacuum', 'get_db_file_stats', 'get_league_stats', 'sync_persistent_backup', '_lock',
+    'add_club', 'get_club', 'get_all_clubs', 'update_club_full', 'rebrand_club', 'delete_club',
     'add_or_update_player', 'get_player', 'get_player_by_discord_id',
     'is_player_under_contract', 'terminate_player_contract', 'extend_player_contract',
     'get_all_players', 'get_club_player_count', 'get_club_players', 'delete_player',

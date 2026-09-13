@@ -101,6 +101,9 @@ def is_federation(member: discord.Member) -> bool:
 
 def is_club_board_or_owner(member: discord.Member, club_tag: str) -> bool:
     if not member or not club_tag: return False
+    # Zarząd Federacji oraz Administrator posiada pełne prawo reprezentowania i zarządzania dowolnym klubem
+    if is_federation(member) or (getattr(member, "guild_permissions", None) and member.guild_permissions.administrator):
+        return True
     club = database.get_club(club_tag)
     if not club: return False
 
