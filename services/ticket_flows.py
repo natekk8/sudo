@@ -736,28 +736,33 @@ async def proces_aneksu(interaction: discord.Interaction):
         embed_start.set_footer(text=f"{league_config.league_name()} • Biuro")
         await kanal.send(embed=embed_start)
 
-        # Weryfikacja: zarząd musi być w jakimś klubie
-        all_clubs = database.get_all_clubs()
-        user_club = None
-        for c in all_clubs:
-            if is_club_board_or_owner(user, c["tag"]):
-                user_club = c["tag"]
-                break
+        # Wybór klubu: Federacja dowolny, właściciel tylko swój
+        is_fed = is_federation(user) or (getattr(user, "guild_permissions", None) and user.guild_permissions.administrator)
 
-        if not user_club:
-            await kanal.send(embed=discord.Embed(description="❌ Nie jesteś w zarządzie żadnego zarejestrowanego klubu.", color=0xe74c3c))
-            await asyncio.sleep(5); await _safe_delete_channel(kanal); return
+        while True:
+            if is_fed:
+                kup_input = await _zadaj_pytanie(kanal, user, "Skrót klubu, dla którego składasz aneks (np. `FCZ`):", client)
+            else:
+                kup_input = await _zadaj_pytanie(kanal, user, "Podaj skrót SWOJEGO KLUBU (np. `FCZ`):", client)
+            user_club = clean_tag(kup_input)
+            if not database.get_club(user_club):
+                await kanal.send(embed=discord.Embed(description=f"❌ Klub `{user_club}` nie istnieje!", color=0xe74c3c))
+                continue
+            if not is_club_board_or_owner(user, user_club):
+                await kanal.send(embed=discord.Embed(description="❌ Nie jesteś w zarządzie tego klubu!", color=0xe74c3c))
+                continue
+            break
 
         # Zawodnik musi być w tym samym klubie
         while True:
-            gracz_input = await _zadaj_pytanie(kanal, user, f"Oznacz @Zawodnika Twojego klubu `{user_club}` (lub wpisz imię):", client)
+            gracz_input = await _zadaj_pytanie(kanal, user, f"Oznacz @Zawodnika z klubu `{user_club}` (lub wpisz imię):", client)
             clean_name, player_dc_id, player_label = await resolve_player_identity(guild, gracz_input, client)
             existing = database.is_player_under_contract(clean_name, player_dc_id)
             if not existing:
                 await kanal.send(embed=discord.Embed(description=f"❌ Zawodnik `{clean_name}` nie ma aktywnego kontraktu w bazie!", color=0xe74c3c))
                 continue
             if existing.get("club_tag", "").upper() != user_club:
-                await kanal.send(embed=discord.Embed(description=f"❌ Zawodnik należy do `{existing.get('club_tag', '?')}`, nie do Twojego klubu `{user_club}`!", color=0xe74c3c))
+                await kanal.send(embed=discord.Embed(description=f"❌ Zawodnik należy do `{existing.get('club_tag', '?')}`, nie do `{user_club}`!", color=0xe74c3c))
                 continue
             real_name = clean_player_name(existing.get("name")) or clean_name
             if not player_dc_id and existing.get("discord_id"):
@@ -841,16 +846,21 @@ async def proces_rozwiazania(interaction: discord.Interaction):
         embed_start.set_footer(text=f"{league_config.league_name()} • Biuro")
         await kanal.send(embed=embed_start)
 
-        # Szukaj klubu wnioskodawcy
-        all_clubs = database.get_all_clubs()
-        user_club = None
-        for c in all_clubs:
-            if is_club_board_or_owner(user, c["tag"]):
-                user_club = c["tag"]
-                break
-        if not user_club:
-            await kanal.send(embed=discord.Embed(description="❌ Nie jesteś w zarządzie żadnego zarejestrowanego klubu.", color=0xe74c3c))
-            await asyncio.sleep(5); await _safe_delete_channel(kanal); return
+        is_fed = is_federation(user) or (getattr(user, "guild_permissions", None) and user.guild_permissions.administrator)
+
+        while True:
+            if is_fed:
+                kup_input = await _zadaj_pytanie(kanal, user, "Skrót klubu, dla którego składasz wniosek o rozwiązanie (np. `FCZ`):", client)
+            else:
+                kup_input = await _zadaj_pytanie(kanal, user, "Podaj skrót SWOJEGO KLUBU (np. `FCZ`):", client)
+            user_club = clean_tag(kup_input)
+            if not database.get_club(user_club):
+                await kanal.send(embed=discord.Embed(description=f"❌ Klub `{user_club}` nie istnieje!", color=0xe74c3c))
+                continue
+            if not is_club_board_or_owner(user, user_club):
+                await kanal.send(embed=discord.Embed(description="❌ Nie jesteś w zarządzie tego klubu!", color=0xe74c3c))
+                continue
+            break
 
         while True:
             gracz_input = await _zadaj_pytanie(kanal, user, f"Oznacz @Zawodnika do rozwiązania (z klubu `{user_club}`):", client)
@@ -1206,4 +1216,74 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
         try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await _safe_delete_channel(kanal)
         except Exception: pass
 
-proces_rebrandingu = proces_zarzadzania_klubem
+
+# =========================================================================
+# 8. WNIOSEK OGÓLNY (przełożenie meczu, reklamacja, inne)
+# =========================================================================
+async def proces_wniosku_ogolnego(interaction: discord.Interaction):
+    guild, user, client = interaction.guild, interaction.user, interaction.client
+    if _check_spam(guild, user, interaction):
+        return await interaction.followup.send("❌ Masz już otwarty kanał wniosku.", ephemeral=True)
+
+    kanal = await _create_ticket_channel(guild, user, "wniosek")
+    try:
+        await interaction.followup.send(f"Kanał: {kanal.mention}", ephemeral=True)
+        embed_start = discord.Embed(
+            title="📨 Wniosek Ogólny do Zarządu Federacji",
+            description=(
+                f"Witaj {user.mention}! Skorzystaj z tego formularza, aby zgłosić sprawę do Zarządu Federacji Siatkówki Stołowej.\n"
+                "> Przykłady: przełożenie meczu, reklamacja, zapytanie regulaminowe, inne.\n"
+                "> Masz **15 minut** na każdą odpowiedź."
+            ),
+            color=0x2b2d31
+        )
+        embed_start.set_footer(text=f"{league_config.league_name()} • Biuro")
+        await kanal.send(embed=embed_start)
+
+        temat = await _zadaj_pytanie(kanal, user, "Temat wniosku (np. `Przełożenie meczu`, `Reklamacja decyzji`):", client)
+
+        while True:
+            klub_input = await _zadaj_pytanie(kanal, user, "Skrót klubu, którego dotyczy wniosek (lub `Brak`):", client)
+            if klub_input.strip().lower() == "brak":
+                klub_tag = None
+                break
+            klub_tag = clean_tag(klub_input)
+            if database.get_club(klub_tag) or klub_tag == "BRAK":
+                if klub_tag == "BRAK": klub_tag = None
+                break
+            await kanal.send(embed=discord.Embed(description=f"❌ Klub `{klub_tag}` nie istnieje. Wpisz poprawny TAG lub `Brak`.", color=0xe74c3c))
+
+        tresc = await _zadaj_pytanie(kanal, user, "Opisz szczegółowo treść wniosku:", client)
+
+        embed = discord.Embed(
+            title=f"📨 Wniosek: {temat[:50]}",
+            description=tresc,
+            color=0x5865f2
+        )
+        embed.add_field(name="Wnioskodawca", value=user.mention, inline=True)
+        if klub_tag:
+            embed.add_field(name="Klub", value=f"`{klub_tag}`", inline=True)
+        embed.add_field(name="Status", value="⏳ Oczekuje na decyzję Zarządu Federacji", inline=False)
+        embed.set_footer(text=f"{league_config.league_name()} • Biuro")
+
+        v = WniosekConfirmView(user.id)
+        await kanal.send(embed=embed, view=v)
+        await v.wait()
+        if not v.value:
+            await kanal.send(embed=discord.Embed(description="❌ Wniosek anulowany.", color=0xe74c3c))
+            await asyncio.sleep(2); await _safe_delete_channel(kanal); return
+
+        app_id = database.create_application(
+            app_type="WNIOSEK_OGOLNY", applicant_id=user.id,
+            club_tag=klub_tag, reason=temat,
+            new_board_txt=tresc  # przechowujemy treść w wolnym polu tekstowym
+        )
+        await _send_forum_application(guild, kanal, embed,
+                                       f"[WNIOSEK] {temat[:40]}", app_id)
+
+    except TimeoutError:
+        pass
+    except Exception as e:
+        print(f"[proces_wniosku_ogolnego] Błąd: {e}\n{traceback.format_exc()}")
+        try: await kanal.send(embed=discord.Embed(description=f"❌ Błąd: `{e}`", color=0xe74c3c)); await asyncio.sleep(5); await _safe_delete_channel(kanal)
+        except Exception: pass

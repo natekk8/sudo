@@ -1,10 +1,11 @@
 import asyncio
 import discord
+from discord import app_commands
 from discord.ext import commands
 from config import DISCORD_TOKEN, GUILD_ID
 import database
 import utils.league_config as league_config
-from views.main_panel import WidokPaneluGlownego
+from views.main_panel import WidokTransferowIKontraktow, WidokAdministracjiKlubow
 from views.market_panel import WidokRynkuTransferowego
 from views.application_view import ForumApplicationView
 from tasks.expirations import setup_expirations_task
@@ -22,62 +23,78 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 expirations_task = setup_expirations_task(bot, guild_id=GUILD_ID or None)
 
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def setup_panel(ctx):
+@bot.tree.command(name="setup_panel", description="[ADMIN] Wysyła panele FSS na ten kanał.")
+@app_commands.default_permissions(administrator=True)
+async def setup_panel(interaction: discord.Interaction):
     """
-    Wysyła DWA panele:
-    1️⃣ Biuro Federacji – oficjalne procesy ligowe
-    2️⃣ Rynek Transferowy – giełda graczy i przegląd składów
+    Wysyła TRZY panele FSS:
+    1️⃣ Transfery i Kontrakty
+    2️⃣ Rynek Transferowy
+    3️⃣ Administracja Klubów
     """
+    if not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message(
+            "❌ Tylko administratorzy mogą użyć tej komendy.", ephemeral=True)
+
+    await interaction.response.send_message("⏳ Wysyłam panele...", ephemeral=True)
+
     mx = league_config.max_players()
     org_name = league_config.league_name()
+
+    # ── Panel 1: Transfery i Kontrakty ───────────────────────────────────────
     embed1 = discord.Embed(
-        title="🏛️ Biuro Federacji Siatkówki Stołowej (FSS)",
+        title="📋 Transfery i Kontrakty — FSS",
         description=(
-            "Oficjalne procesy rejestracyjno-transferowe FSS. Bot otworzy prywatny kanał ticketu, "
-            "gdzie odpowiesz na pytania i możesz swobodnie oznaczać (@) użytkowników.\n\n"
-            "**📝 Rejestracja Klubu** · Zakładanie nowej drużyny w FSS\n"
-            f"**👤 Podpisanie Gracza** · Rejestracja wolnego agenta (limit: **{mx}** graczy)\n"
-            "**🤝 Wniosek Transferowy** · Kupno zawodnika z innego klubu\n"
-            "**🔄 Wymiana Zawodników** · Zamiana zawodnikami między klubami (opcjonalna dopłata)\n"
-            "**⏱️ Wypożyczenie** · Czasowe przejście z automatycznym powrotem\n"
-            "**📄 Aneks do Umowy** · Przedłużenie wygasającego kontraktu / zmiana klauzuli\n"
-            "**❌ Rozwiązanie Umowy** · Za porozumieniem stron lub dyscyplinarne\n"
-            "**⚙️ Zarządzanie Klubem** · Zmiana nazwy, TAGu, właściciela lub zarządu drużyny"
+            "Oficjalne procesy transferowo-kontraktowe Federacji Siatkówki Stołowej. "
+            "Po kliknięciu przycisku bot otworzy **prywatny kanał ticketu**, gdzie odpiszesz na pytania.\n\n"
+            f"**👤 Podpisanie Gracza** · Rejestracja wolnego agenta (limit: **{mx}** zawodników w klubie)\n"
+            "**🤝 Wniosek Transferowy / Wymiana** · Kupno zawodnika z innego klubu lub wymiana zawodnikami między klubami z opcjonalną dopłatą\n"
+            "**⏱️ Wypożyczenie** · Czasowe przejście zawodnika do innego klubu z automatycznym powrotem\n\n"
+            "**📄 Aneks do Umowy** · Przedłużenie wygasającego kontraktu lub zmiana klauzuli wykupu\n"
+            "**❌ Rozwiązanie Umowy** · Za porozumieniem stron lub tryb dyscyplinarny"
         ),
         color=0x2b2d31
     )
-    embed1.set_footer(text=f"{org_name} • Biuro")
-    await ctx.send(embed=embed1, view=WidokPaneluGlownego())
+    embed1.set_footer(text=f"{org_name} • Transfery i Kontrakty")
+    await interaction.channel.send(embed=embed1, view=WidokTransferowIKontraktow())
 
+    # ── Panel 2: Rynek Transferowy ───────────────────────────────────────────
     embed2 = discord.Embed(
-        title="📊 Rynek Transferowy FSS",
+        title="📊 Giełda Graczy — FSS",
         description=(
-            "Giełda graczy i baza składów Federacji Siatkówki Stołowej.\n\n"
+            "Giełda wolnych agentów i baza składów Federacji Siatkówki Stołowej.\n\n"
             "**🙋 Szukam Klubu**\n"
-            "Zarejestruj się jako wolny agent – widoczny dla zarządów szukających zawodników. "
-            "Ponowne kliknięcie usunie Cię z listy.\n\n"
+            "Zarejestruj się jako wolny agent — Twoje zgłoszenie będzie widoczne dla zarządów szukających zawodników. "
+            "Kliknięcie ponownie usuwa Cię z listy.\n\n"
             "**🔍 Szukam Zawodnika**\n"
-            "Przeglądaj listę graczy bez klubu, szukających nowej drużyny.\n\n"
+            "Przeglądaj listę zarejestrowanych wolnych agentów szukających nowej drużyny.\n\n"
             "**📋 Składy Drużyn**\n"
-            "Przeglądaj pełne kadry drużyn z wizualnymi paskami zapełnienia."
+            "Sprawdź pełne kadry wszystkich zarejestrowanych klubów z wizualnym paskiem zapełnienia."
         ),
         color=0x1e1f22
     )
-    embed2.set_footer(text=f"{org_name} • Rynek")
-    await ctx.send(embed=embed2, view=WidokRynkuTransferowego())
+    embed2.set_footer(text=f"{org_name} • Giełda Graczy")
+    await interaction.channel.send(embed=embed2, view=WidokRynkuTransferowego())
 
-
-    try:
-        await ctx.message.delete()
-    except Exception:
-        pass
+    # ── Panel 3: Administracja Klubów ────────────────────────────────────────
+    embed3 = discord.Embed(
+        title="🏛️ Biuro Federacji Siatkówki Stołowej",
+        description=(
+            "Oficjalne sprawy administracyjne FSS — rejestracja, zarządzanie klubem oraz wnioski ogólne do Zarządu Federacji.\n\n"
+            "**📝 Rejestracja Klubu** · Złóż wniosek o dołączenie nowej drużyny do rozgrywek FSS\n"
+            "**⚙️ Zarządzanie Klubem** · Zmiana nazwy, TAGu, właściciela lub składu zarządu; likwidacja klubu\n\n"
+            "**📨 Złóż Wniosek Ogólny** · Inne sprawy kierowane do Zarządu Federacji — przełożenie meczu, reklamacja decyzji, zapytania regulaminowe i inne"
+        ),
+        color=0x3d5a80
+    )
+    embed3.set_footer(text=f"{org_name} • Biuro Federacji")
+    await interaction.channel.send(embed=embed3, view=WidokAdministracjiKlubow())
 
 
 @bot.event
 async def on_ready():
-    bot.add_view(WidokPaneluGlownego())
+    bot.add_view(WidokTransferowIKontraktow())
+    bot.add_view(WidokAdministracjiKlubow())
     bot.add_view(WidokRynkuTransferowego())
 
     # Odblokuj wnioski, które mogły utknąć w statusie PROCESSING po restarcie

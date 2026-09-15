@@ -51,6 +51,8 @@ def _reconstruct_app_from_message(message: discord.Message, app_id: int, guild: 
         app_type = "ZARZADZANIE_KLUBU"
     elif "USUNIĘCIE" in title.upper() or "USUNIECIE" in title.upper() or "LIKWIDACJA" in title.upper():
         app_type = "USUNIECIE_KLUBU"
+    elif "WNIOSEK" in title.upper():
+        app_type = "WNIOSEK_OGOLNY"
 
     if not app_type:
         return None
@@ -226,14 +228,14 @@ class ForumApplicationView(ui.View):
             self.add_item(btn)
 
         # ── Odrzuć ofertę (tylko dla typów niebędących rebrandingiem/rejestracji/usunięcia) ──
-        if app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU", "ZARZADZANIE_KLUBU", "ROZWIAZANIE_DYSCYPLINARNE", "USUNIECIE_KLUBU"):
+        if app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU", "ZARZADZANIE_KLUBU", "ROZWIAZANIE_DYSCYPLINARNE", "USUNIECIE_KLUBU", "WNIOSEK_OGOLNY"):
             btn_rp = ui.Button(label="❌ Odrzuć ofertę", style=discord.ButtonStyle.danger,
                                custom_id=f"app:{self.app_id}:party_reject")
             btn_rp.callback = self.cb_party_reject
             self.add_item(btn_rp)
 
         # ── Historia transferów (tylko dla wniosków dot. gracza) ──
-        if app.get("player_name") and app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU", "ZARZADZANIE_KLUBU", "USUNIECIE_KLUBU"):
+        if app.get("player_name") and app_type not in ("REJESTRACJA_KLUBU", "REBRAND_KLUBU", "ZARZADZANIE_KLUBU", "USUNIECIE_KLUBU", "WNIOSEK_OGOLNY"):
             btn_h = ui.Button(label="📜 Poprzednie kluby", style=discord.ButtonStyle.secondary,
                               custom_id=f"app:{self.app_id}:history")
             btn_h.callback = self.cb_history
@@ -1008,6 +1010,22 @@ class ForumApplicationView(ui.View):
                     )
                 except Exception as e:
                     print(f"[Fed] Błąd ogłoszenia likwidacji klubu: {e}")
+
+        # ─── WNIOSEK OGÓLNY ───
+        elif app_type == "WNIOSEK_OGOLNY":
+            database.set_application_status(self.app_id, "ACCEPTED")
+
+            embed = interaction.message.embeds[0]
+            embed.color = 0x2ecc71
+            embed.title = (embed.title or "✅ Wniosek").replace("📨", "✅")
+            embed.add_field(name="Decyzja Federacji",
+                            value=f"Zatwierdzono przez {interaction.user.mention}.", inline=False)
+            await interaction.message.edit(embed=embed, view=None)
+
+            applicant = app.get("applicant_id")
+            if applicant:
+                await send_dm(interaction.client, applicant,
+                              f"✅ Twój wniosek #{self.app_id} został rozpatrzony pozytywnie przez Zarząd Federacji.")
 
         # ─── Archiwizacja wątku ───
         try:

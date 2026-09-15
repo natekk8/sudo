@@ -1,44 +1,40 @@
-import discord
+﻿import discord
 from discord import ui
 import database
 
-class WidokPaneluGlownego(ui.View):
-    """Panel Biuro Federacji – oficjalne operacje ligowe (Wiadomość 1)."""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Wiadomosc 1: Transfery i Kontrakty
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RYNEK_ZAMKNIETY = (
+    "⛔ **Rynek transferowy jest obecnie ZAMKNIĘTY!**\n"
+    "> Składanie wniosków kontraktowych, transferów i wypożyczeń zostało wstrzymane przez Zarząd Federacji."
+)
+
+
+class WidokTransferowIKontraktow(ui.View):
+    """Panel Transfery i Kontrakty."""
 
     def __init__(self):
         super().__init__(timeout=None)
 
-    # ── Rząd 1: Podstawowe wnioski (okienko transferowe) ──
-
-    @ui.button(label="Rejestracja Klubu", style=discord.ButtonStyle.primary,
-               emoji="📝", custom_id="p_klub", row=0)
-    async def b_klub(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        from services.ticket_flows import proces_rejestracji_klubu
-        interaction.client.loop.create_task(proces_rejestracji_klubu(interaction))
+    # Rzad 0: operacje rynkowe
 
     @ui.button(label="Podpisanie Gracza", style=discord.ButtonStyle.success,
                emoji="👤", custom_id="p_wolny", row=0)
     async def b_wolny(self, interaction: discord.Interaction, button: ui.Button):
         if not database.is_market_open():
-            return await interaction.response.send_message(
-                "⛔ **Rynek transferowy jest obecnie ZAMKNIĘTY!**\n"
-                "> Składanie wniosków kontraktowych, transferów i wypożyczeń zostało wstrzymane przez Zarząd Federacji.",
-                ephemeral=True
-            )
+            return await interaction.response.send_message(_RYNEK_ZAMKNIETY, ephemeral=True)
         await interaction.response.defer(ephemeral=True)
         from services.ticket_flows import proces_podpisania
         interaction.client.loop.create_task(proces_podpisania(interaction))
 
-    @ui.button(label="Wniosek Transferowy", style=discord.ButtonStyle.secondary,
+    @ui.button(label="Wniosek Transferowy / Wymiana", style=discord.ButtonStyle.secondary,
                emoji="🤝", custom_id="p_trans", row=0)
     async def b_trans(self, interaction: discord.Interaction, button: ui.Button):
         if not database.is_market_open():
-            return await interaction.response.send_message(
-                "⛔ **Rynek transferowy jest obecnie ZAMKNIĘTY!**\n"
-                "> Składanie wniosków kontraktowych, transferów i wypożyczeń zostało wstrzymane przez Zarząd Federacji.",
-                ephemeral=True
-            )
+            return await interaction.response.send_message(_RYNEK_ZAMKNIETY, ephemeral=True)
         await interaction.response.defer(ephemeral=True)
         from services.ticket_flows import proces_transferu
         interaction.client.loop.create_task(proces_transferu(interaction))
@@ -47,16 +43,12 @@ class WidokPaneluGlownego(ui.View):
                emoji="⏱️", custom_id="p_wyp", row=0)
     async def b_wyp(self, interaction: discord.Interaction, button: ui.Button):
         if not database.is_market_open():
-            return await interaction.response.send_message(
-                "⛔ **Rynek transferowy jest obecnie ZAMKNIĘTY!**\n"
-                "> Składanie wniosków kontraktowych, transferów i wypożyczeń zostało wstrzymane przez Zarząd Federacji.",
-                ephemeral=True
-            )
+            return await interaction.response.send_message(_RYNEK_ZAMKNIETY, ephemeral=True)
         await interaction.response.defer(ephemeral=True)
         from services.ticket_flows import proces_wypozyczenia
         interaction.client.loop.create_task(proces_wypozyczenia(interaction))
 
-    # ── Rząd 2: Zarządzanie kontraktami i klubami ──
+    # Rzad 1: zarzadzanie kontraktami
 
     @ui.button(label="Aneks do Umowy", style=discord.ButtonStyle.primary,
                emoji="📄", custom_id="p_aneks", row=1)
@@ -72,9 +64,38 @@ class WidokPaneluGlownego(ui.View):
         from services.ticket_flows import proces_rozwiazania
         interaction.client.loop.create_task(proces_rozwiazania(interaction))
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Wiadomosc 3: Administracja Klubow i Wnioski Ogolne
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WidokAdministracjiKlubow(ui.View):
+    """Panel Administracji – rejestracja, zarzadzanie, wnioski ogolne."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @ui.button(label="Rejestracja Klubu", style=discord.ButtonStyle.primary,
+               emoji="📝", custom_id="p_klub", row=0)
+    async def b_klub(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        from services.ticket_flows import proces_rejestracji_klubu
+        interaction.client.loop.create_task(proces_rejestracji_klubu(interaction))
+
     @ui.button(label="Zarządzanie Klubem", style=discord.ButtonStyle.secondary,
-               emoji="⚙️", custom_id="p_klub_manage", row=1)
+               emoji="⚙️", custom_id="p_klub_manage", row=0)
     async def b_klub_manage(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         from services.ticket_flows import proces_zarzadzania_klubem
         interaction.client.loop.create_task(proces_zarzadzania_klubem(interaction))
+
+    @ui.button(label="Złóż Wniosek Ogólny", style=discord.ButtonStyle.secondary,
+               emoji="📨", custom_id="p_wniosek_ogolny", row=0)
+    async def b_wniosek_ogolny(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        from services.ticket_flows import proces_wniosku_ogolnego
+        interaction.client.loop.create_task(proces_wniosku_ogolnego(interaction))
+
+
+# Alias dla wstecznej kompatybilnosci
+WidokPaneluGlownego = WidokTransferowIKontraktow
