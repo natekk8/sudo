@@ -40,6 +40,7 @@ async def setup_panel(ctx):
             "**📝 Rejestracja Klubu** · Zakładanie nowej drużyny w FSS\n"
             f"**👤 Podpisanie Gracza** · Rejestracja wolnego agenta (limit: **{mx}** graczy)\n"
             "**🤝 Wniosek Transferowy** · Kupno zawodnika z innego klubu\n"
+            "**🔄 Wymiana Zawodników** · Zamiana zawodnikami między klubami (opcjonalna dopłata)\n"
             "**⏱️ Wypożyczenie** · Czasowe przejście z automatycznym powrotem\n"
             "**📄 Aneks do Umowy** · Przedłużenie wygasającego kontraktu / zmiana klauzuli\n"
             "**❌ Rozwiązanie Umowy** · Za porozumieniem stron lub dyscyplinarne\n"

@@ -37,6 +37,8 @@ def _reconstruct_app_from_message(message: discord.Message, app_id: int, guild: 
         app_type = "PODPISANIE"
     elif "TRANSFER" in title.upper():
         app_type = "TRANSFER"
+    elif "WYMIANA" in title.upper():
+        app_type = "WYMIANA"
     elif "WYPOŻYCZENIE" in title.upper() or "WYPOZYCZENIE" in title.upper():
         app_type = "WYPOZYCZENIE"
     elif "ANEKS" in title.upper():
@@ -180,7 +182,7 @@ class ForumApplicationView(ui.View):
             return
 
         app_type = app.get("type")
-        is_transfer_type = app_type in ("TRANSFER", "WYPOZYCZENIE", "PODPISANIE", "ANEKS", "ROZWIAZANIE_POLUBOWNE")
+        is_transfer_type = app_type in ("TRANSFER", "WYPOZYCZENIE", "PODPISANIE", "ANEKS", "ROZWIAZANIE_POLUBOWNE", "WYMIANA")
 
         # ── Zgoda gracza ──
         if app.get("needs_player_agree") and app.get("player_discord_id") and is_transfer_type:
@@ -200,6 +202,7 @@ class ForumApplicationView(ui.View):
                 "TRANSFER": "Zgoda kupującego",
                 "WYPOZYCZENIE": "Zgoda przyjmującego",
                 "ANEKS": "Zgoda zarządu",
+                "WYMIANA": "Zgoda strony A",
             }.get(app_type, "Zgoda klubu")
             if app.get("target_club_agreed"):
                 btn = ui.Button(label=f"{t_label} ✅", style=discord.ButtonStyle.green,
@@ -212,7 +215,7 @@ class ForumApplicationView(ui.View):
 
         # ── Zgoda sprzedającego / oddającego ──
         if app.get("needs_source_club_agree"):
-            s_label = "Zgoda sprzedającego" if app_type == "TRANSFER" else "Zgoda oddającego"
+            s_label = {"TRANSFER": "Zgoda sprzedającego", "WYMIANA": "Zgoda strony B"}.get(app_type, "Zgoda oddającego")
             if app.get("source_club_agreed"):
                 btn = ui.Button(label=f"{s_label} ✅", style=discord.ButtonStyle.green,
                                 disabled=True, custom_id=f"app:{self.app_id}:s_agree")
@@ -631,6 +634,118 @@ class ForumApplicationView(ui.View):
                 await send_dm(interaction.client, dc_id,
                               f"📄 Transfer do `{target_club}` zatwierdzony!\n"
                               f"> Umowa do `{app.get('expires_at')}` | Klauzula `{app.get('clause')}`")
+
+        # ─── WYMIANA ───
+        elif app_type == "WYMIANA":
+            target_club = clean_tag(app.get("target_club"))   # strona A (inicjator)
+            source_club = clean_tag(app.get("source_club"))   # strona B
+
+            # Dekoduj zawodnika A (z bazy: player_name / player_discord_id / clause / expires_at)
+            rn_a   = app.get("player_name", "")
+            dc_a   = app.get("player_discord_id")
+            klauz_a = app.get("clause", "Brak")
+            wazny_do_a = app.get("expires_at")
+
+            # Dekoduj zawodnika B z new_founder_txt: "WYMIANA|rn_b|dc_b|wazny_do_b|klauz_b|dopl_b"
+            rn_b = dc_b = wazny_do_b = klauz_b = dopl_b = None
+            enc_b = app.get("new_founder_txt", "")
+            if enc_b and enc_b.startswith("WYMIANA|"):
+                parts = enc_b.split("|")
+                rn_b        = parts[1] if len(parts) > 1 else None
+                dc_b_str    = parts[2] if len(parts) > 2 else ""
+                dc_b        = int(dc_b_str) if dc_b_str.isdigit() else None
+                wazny_do_b  = parts[3] if len(parts) > 3 else None
+                klauz_b     = parts[4] if len(parts) > 4 else "Brak"
+                dopl_b      = parts[5] if len(parts) > 5 else "Brak"
+            dopl_a = app.get("amount", "Brak")
+
+            if not rn_b:
+                await interaction.followup.send(
+                    "❌ Dane wymiany są uszkodzone (brak zawodnika B). Wniosek nie może zostać zaakceptowany.", ephemeral=True)
+                database.revert_application_status(self.app_id)
+                return False
+
+            c_target = database.get_club(target_club)
+            c_source = database.get_club(source_club)
+
+            # ── Role: zawodnik A (target_club → source_club) ──
+            if dc_a:
+                m_a = await get_or_fetch_member(guild, dc_a)
+                if m_a:
+                    if c_target:
+                        r_old = guild.get_role(c_target.get("role_player_id", 0))
+                        if r_old:
+                            try: await m_a.remove_roles(r_old)
+                            except Exception: pass
+                    if c_source:
+                        r_new = guild.get_role(c_source.get("role_player_id", 0))
+                        if r_new:
+                            try: await m_a.add_roles(r_new)
+                            except Exception: pass
+                    database.remove_free_agent(dc_a)
+
+            # ── Role: zawodnik B (source_club → target_club) ──
+            if dc_b:
+                m_b = await get_or_fetch_member(guild, dc_b)
+                if m_b:
+                    if c_source:
+                        r_old = guild.get_role(c_source.get("role_player_id", 0))
+                        if r_old:
+                            try: await m_b.remove_roles(r_old)
+                            except Exception: pass
+                    if c_target:
+                        r_new = guild.get_role(c_target.get("role_player_id", 0))
+                        if r_new:
+                            try: await m_b.add_roles(r_new)
+                            except Exception: pass
+                    database.remove_free_agent(dc_b)
+
+            # ── Kontrakty: A idzie do source_club, B idzie do target_club ──
+            database.add_or_update_player(
+                name=rn_a, discord_id=dc_a, club_tag=source_club, parent_club_tag=source_club,
+                clause=klauz_a, contract_type="TRANSFER", expires_at=wazny_do_a
+            )
+            database.add_transfer_history(rn_a, dc_a, target_club, source_club, "WYMIANA", dopl_a)
+
+            if rn_b:
+                database.add_or_update_player(
+                    name=rn_b, discord_id=dc_b, club_tag=target_club, parent_club_tag=target_club,
+                    clause=klauz_b, contract_type="TRANSFER", expires_at=wazny_do_b
+                )
+                database.add_transfer_history(rn_b, dc_b, source_club, target_club, "WYMIANA", dopl_b)
+
+            database.set_application_status(self.app_id, "ACCEPTED")
+
+            embed = interaction.message.embeds[0]
+            embed.color = 0x2ecc71
+            embed.title = f"✅ WYMIANA: {rn_a} ↔ {rn_b}"
+            for i, f in enumerate(embed.fields):
+                if f.name == "Status":
+                    embed.set_field_at(i, name="Status",
+                                       value=f"✅ Zatwierdzono ({interaction.user.mention})", inline=False)
+            await interaction.message.edit(embed=embed, view=None)
+
+            if kom_channel:
+                try:
+                    t_nazwa = c_target.get("name", target_club) if c_target else target_club
+                    s_nazwa = c_source.get("name", source_club) if c_source else source_club
+                    dopl_txt = ""
+                    if dopl_a and dopl_a != "Brak":
+                        dopl_txt += f" | Dopłata od `{target_club}`: `{dopl_a}`"
+                    if dopl_b and dopl_b != "Brak":
+                        dopl_txt += f" | Dopłata od `{source_club}`: `{dopl_b}`"
+                    await kom_channel.send(
+                        f"🔄 **WYMIANA ZAWODNIKÓW!** **{rn_a}** ({t_nazwa}) ↔ **{rn_b}** ({s_nazwa}){dopl_txt}",
+                        allowed_mentions=discord.AllowedMentions.none()
+                    )
+                except Exception as e:
+                    print(f"[Fed] Błąd ogłoszenia wymiany: {e}")
+            for dc_id_msg, club_dest in [(dc_a, source_club), (dc_b, target_club)]:
+                if dc_id_msg:
+                    await send_dm(interaction.client, dc_id_msg,
+                                  f"🔄 Twoja wymiana została zatwierdzona! Trafiasz do `{club_dest}`.\n"
+                                  f"> Umowa do `{wazny_do_a if dc_id_msg == dc_a else wazny_do_b}` | "
+                                  f"Klauzula `{klauz_a if dc_id_msg == dc_a else klauz_b}`")
 
         # ─── WYPOŻYCZENIE ───
         elif app_type == "WYPOZYCZENIE":
