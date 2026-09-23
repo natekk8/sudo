@@ -16,7 +16,8 @@ def get_club_players(club_tag: str) -> list:
 
 def add_or_update_player(name: str, discord_id: int, club_tag: str, parent_club_tag: str,
                           clause: str, contract_type: str, expires_at: str,
-                          parent_contract_expires_at: str = None, parent_clause: str = None):
+                          parent_contract_expires_at: str = None, parent_clause: str = None,
+                          is_overflow: int = 0, slot_deadline: str = None):
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -27,7 +28,7 @@ def add_or_update_player(name: str, discord_id: int, club_tag: str, parent_club_
                 if existing_dc and existing_dc["name"].lower() != name.lower():
                     cursor.execute("DELETE FROM players WHERE name = ?", (existing_dc["name"],))
 
-            cursor.execute("SELECT expires_at, clause FROM players WHERE name = ? COLLATE NOCASE", (name,))
+            cursor.execute("SELECT expires_at, clause, is_overflow, slot_deadline FROM players WHERE name = ? COLLATE NOCASE", (name,))
             old = cursor.fetchone()
             warned_7d = warned_3d = warned_1d = 0
             if old and old["expires_at"] == expires_at:
@@ -36,18 +37,25 @@ def add_or_update_player(name: str, discord_id: int, club_tag: str, parent_club_
                 if flags:
                     warned_7d, warned_3d, warned_1d = flags["warned_7d"], flags["warned_3d"], flags["warned_1d"]
 
+            # Jeśli nie podano nowych wartości, użyj starych
+            if is_overflow == 0 and old and old["is_overflow"] == 1:
+                is_overflow = 1
+            if not slot_deadline and old and old["slot_deadline"]:
+                slot_deadline = old["slot_deadline"]
+
             cursor.execute("""
                 INSERT OR REPLACE INTO players
                     (name, discord_id, club_tag, parent_club_tag, clause, parent_clause,
                      contract_type, expires_at, parent_contract_expires_at,
-                     warned_7d, warned_3d, warned_1d)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     warned_7d, warned_3d, warned_1d, is_overflow, slot_deadline)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 name, discord_id,
                 club_tag.strip().upper() if club_tag else None,
                 parent_club_tag.strip().upper() if parent_club_tag else None,
                 clause, parent_clause, contract_type, expires_at,
-                parent_contract_expires_at, warned_7d, warned_3d, warned_1d
+                parent_contract_expires_at, warned_7d, warned_3d, warned_1d,
+                is_overflow, slot_deadline
             ))
             conn.commit()
 

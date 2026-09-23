@@ -132,7 +132,8 @@ def has_open_ticket(guild: discord.Guild, user_id: int) -> bool:
             if isinstance(target, discord.Member) and target.id == user_id:
                 if overwrite.view_channel and overwrite.send_messages:
                     prefixes = ("rejestracja-", "kontrakt-", "transfer-", "wypozyczenie-",
-                                "aneks-", "rozwiazanie-", "rebrand-", "zarzadzanie-")
+                                "aneks-", "rozwiazanie-", "rebrand-", "zarzadzanie-",
+                                "wniosek-", "rezerwa-")
                     if any(channel.name.startswith(p) for p in prefixes):
                         return True
     return False

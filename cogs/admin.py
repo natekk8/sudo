@@ -1,5 +1,6 @@
 import os
 import tempfile
+import asyncio
 from datetime import datetime
 import discord
 from discord import app_commands
@@ -25,43 +26,49 @@ class AdminCog(commands.Cog):
         async def reset_wszystko(interaction: discord.Interaction):
             if not _is_admin(interaction.user):
                 return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
-            database.reset_all(full_reset_including_setup=True)
-            await interaction.response.send_message(embed=_build_reset_embed("wszystko"))
+            await interaction.response.defer(ephemeral=True)
+            await asyncio.to_thread(database.reset_all, full_reset_including_setup=True)
+            await interaction.followup.send(embed=_build_reset_embed("wszystko"))
 
         @reset_group.command(name="kluby", description="[Admin] Resetuje kluby, powiązane kontrakty i wnioski (zachowuje /setup i giełdę)")
         async def reset_kluby(interaction: discord.Interaction):
             if not _is_admin(interaction.user):
                 return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
-            database.reset_clubs()
-            await interaction.response.send_message(embed=_build_reset_embed("kluby"))
+            await interaction.response.defer(ephemeral=True)
+            await asyncio.to_thread(database.reset_clubs)
+            await interaction.followup.send(embed=_build_reset_embed("kluby"))
 
         @reset_group.command(name="kontrakty", description="[Admin] Resetuje kontrakty zawodników i wnioski (zachowuje kluby i /setup)")
         async def reset_kontrakty(interaction: discord.Interaction):
             if not _is_admin(interaction.user):
                 return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
-            database.reset_contracts()
-            await interaction.response.send_message(embed=_build_reset_embed("kontrakty"))
+            await interaction.response.defer(ephemeral=True)
+            await asyncio.to_thread(database.reset_contracts)
+            await interaction.followup.send(embed=_build_reset_embed("kontrakty"))
 
         @reset_group.command(name="wnioski", description="[Admin] Czyści wnioski transferowe i resetuje licznik ticketów do #001")
         async def reset_wnioski(interaction: discord.Interaction):
             if not _is_admin(interaction.user):
                 return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
-            database.reset_applications()
-            await interaction.response.send_message(embed=_build_reset_embed("wnioski"))
+            await interaction.response.defer(ephemeral=True)
+            await asyncio.to_thread(database.reset_applications)
+            await interaction.followup.send(embed=_build_reset_embed("wnioski"))
 
         @reset_group.command(name="rynek", description="[Admin] Otwiera rynek, kasuje zaplanowany harmonogram i czyści giełdę graczy")
         async def reset_rynek(interaction: discord.Interaction):
             if not _is_admin(interaction.user):
                 return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
-            database.reset_market()
-            await interaction.response.send_message(embed=_build_reset_embed("rynek"))
+            await interaction.response.defer(ephemeral=True)
+            await asyncio.to_thread(database.reset_market)
+            await interaction.followup.send(embed=_build_reset_embed("rynek"))
 
         @reset_group.command(name="setup", description="[Admin] Przywraca domyślne ustawienia panelu /setup (zachowuje kluby i graczy)")
         async def reset_setup(interaction: discord.Interaction):
             if not _is_admin(interaction.user):
                 return await interaction.response.send_message("❌ Brak uprawnień. Wymagany Zarząd Federacji / Administrator.", ephemeral=True)
-            database.reset_setup()
-            await interaction.response.send_message(embed=_build_reset_embed("setup"))
+            await interaction.response.defer(ephemeral=True)
+            await asyncio.to_thread(database.reset_setup)
+            await interaction.followup.send(embed=_build_reset_embed("setup"))
 
         self.reset_slash_group = reset_group
 

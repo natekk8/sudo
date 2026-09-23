@@ -103,6 +103,24 @@ async def on_ready():
     except Exception as e:
         print(f"[on_ready] Błąd resetu PROCESSING: {e}")
 
+    # Czyszczenie sierocych kanałów ticketów (rozwiązanie problemu trwałej blokady po restarcie)
+    if GUILD_ID:
+        try:
+            guild = bot.get_guild(int(GUILD_ID))
+            if guild:
+                prefixes = ("rejestracja-", "kontrakt-", "transfer-", "wypozyczenie-",
+                            "aneks-", "rozwiazanie-", "rebrand-", "zarzadzanie-",
+                            "wniosek-", "rezerwa-")
+                for channel in guild.text_channels:
+                    if any(channel.name.startswith(p) for p in prefixes):
+                        try:
+                            await channel.delete(reason="Czyszczenie sierocych ticketów po restarcie bota.")
+                            print(f"[on_ready] Usunięto osierocony ticket: {channel.name}")
+                        except Exception as e:
+                            print(f"[on_ready] Nie udało się usunąć ticketu {channel.name}: {e}")
+        except Exception as e:
+            print(f"[on_ready] Błąd podczas czyszczenia ticketów: {e}")
+
     for app in database.get_pending_applications():
         msg_id = app.get("message_id")
         if msg_id:

@@ -98,10 +98,27 @@ class WidokRynkuTransferowego(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @ui.button(label="Szukam Klubu", style=discord.ButtonStyle.success,
+    @ui.button(label="Dołącz do Rezerwy", style=discord.ButtonStyle.success,
                emoji="🙋", custom_id="rynek_szukam_klubu")
     async def b_szukam_klubu(self, interaction: discord.Interaction, button: ui.Button):
         user = interaction.user
+
+        # Jeżeli klika zarząd lub admin, otwórz ticket
+        from utils.helpers import is_federation
+        is_admin = (getattr(user, 'guild_permissions', None) and user.guild_permissions.administrator) or is_federation(user)
+        
+        # Sprawdzamy czy użytkownik jest w zarządzie JAKIEGOKOLWIEK klubu
+        clubs = database.get_all_clubs()
+        user_is_board = False
+        for c in clubs:
+            from utils.helpers import is_club_board_or_owner
+            if is_club_board_or_owner(user, c["tag"]):
+                user_is_board = True
+                break
+
+        if is_admin or user_is_board:
+            from services.ticket_flows import proces_dodania_do_rezerwy
+            return await proces_dodania_do_rezerwy(interaction, interaction.client)
 
         existing = database.get_player_by_discord_id(user.id)
         if existing and existing.get("club_tag"):
@@ -114,14 +131,14 @@ class WidokRynkuTransferowego(ui.View):
         if database.is_free_agent(user.id):
             database.remove_free_agent(user.id)
             await interaction.response.send_message(
-                "✅ Usunięto Cię z listy wolnych agentów. Nie szukasz już klubu.",
+                "✅ Usunięto Cię z Bazy Rezerwowej. Nie szukasz już klubu.",
                 ephemeral=True
             )
         else:
             database.register_free_agent(user.id, user.display_name)
             await interaction.response.send_message(
-                "✅ Zarejestrowano Cię jako **wolnego agenta**! Jesteś widoczny na giełdzie graczy.\n"
-                "Ponowne kliknięcie tego przycisku usunie Cię z listy.",
+                "✅ Zarejestrowano Cię do **Bazy Rezerwowej**! Jesteś widoczny na liście.\n"
+                "Ponowne kliknięcie tego przycisku usunie Cię z bazy.",
                 ephemeral=True
             )
 

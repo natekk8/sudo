@@ -94,6 +94,7 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                 gracz_mention = f"<@{dc_id}>" if dc_id else f"**{gracz_name}**"
                 klub_nazwa = c_obecny.get("name", klub_obecny) if c_obecny else klub_obecny
 
+                # ── OSTRZEŻENIA (1-7 DNI DO KOŃCA) ORAZ BLOK TRY-EXCEPT DM ──
                 # 7 dni przed wygaśnięciem
                 if dni_do_konca <= 7.0 and dni_do_konca > 3.0 and not player.get("warned_7d"):
                     msg = (
@@ -102,7 +103,8 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                         f"> Przedłuż umowę wnioskiem (Aneks), aby gracz nie stał się wolnym agentem.\n"
                         f"> Termin wygaśnięcia: `{expires_at_str}`"
                     )
-                    await _send_warning(bot, dc_id, rep_id, msg)
+                    try: await _send_warning(bot, dc_id, rep_id, msg)
+                    except Exception as e: print(f"Błąd DM do {gracz_name}: {e}")
                     database.set_player_warning_flag(gracz_name, "warned_7d")
 
                 # 3 dni przed wygaśnięciem
@@ -112,7 +114,8 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                         f"w klubie **{klub_nazwa}** (`{klub_obecny}`) wygasa niedługo!\n"
                         f"> Termin wygaśnięcia: `{expires_at_str}`"
                     )
-                    await _send_warning(bot, dc_id, rep_id, msg)
+                    try: await _send_warning(bot, dc_id, rep_id, msg)
+                    except Exception as e: print(f"Błąd DM do {gracz_name}: {e}")
                     database.set_player_warning_flag(gracz_name, "warned_3d")
 
                 # 1 dzień przed wygaśnięciem
@@ -122,8 +125,43 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                         f"w klubie **{klub_nazwa}** (`{klub_obecny}`) wygasa jutro!\n"
                         f"> Termin wygaśnięcia: `{expires_at_str}`"
                     )
-                    await _send_warning(bot, dc_id, rep_id, msg)
+                    try: await _send_warning(bot, dc_id, rep_id, msg)
+                    except Exception as e: print(f"Błąd DM do {gracz_name}: {e}")
                     database.set_player_warning_flag(gracz_name, "warned_1d")
+
+                # ── SPRAWDZANIE ZASADY 4. ZAWODNIKA (IS_OVERFLOW) ──
+                if player.get("is_overflow") == 1 and player.get("slot_deadline"):
+                    try:
+                        deadline_dt = datetime.strptime(player.get("slot_deadline"), "%Y-%m-%d %H:%M:%S")
+                        if now >= deadline_dt:
+                            member = await get_or_fetch_member(guild, dc_id) if dc_id else None
+                            if member and c_obecny:
+                                r_zaw = guild.get_role(c_obecny.get("role_player_id", 0))
+                                if r_zaw:
+                                    try: await member.remove_roles(r_zaw)
+                                    except Exception as e: print(f"[Expirations] Błąd usunięcia roli overflow: {e}")
+                            
+                            database.delete_player(gracz_name)
+                            if dc_id:
+                                # Wyrzucenie do bazy rezerwowej
+                                database.register_free_agent(dc_id, gracz_name, "UNI", "ALL")
+                            
+                            database.add_transfer_history(
+                                player_name=gracz_name, player_discord_id=dc_id,
+                                from_club=klub_obecny, to_club=None,
+                                transfer_type="PRZEKROCZENIE_LIMITU_REZERWA", amount=None
+                            )
+                            
+                            if kom_channel:
+                                await kom_channel.send(
+                                    f"🚨 **KARA ZA PRZEKROCZENIE LIMITU!**\n"
+                                    f"> Klub **{klub_nazwa}** (`{klub_obecny}`) nie zwolnił miejsca w kadrze w ciągu 5 dni.\n"
+                                    f"> Zawodnik **{gracz_name}** został odebrany i przeniesiony do **Bazy Rezerwowej** (utrata statusu transferowego).",
+                                    allowed_mentions=discord.AllowedMentions.none()
+                                )
+                            continue  # Gracz wyrzucony, nie przetwarzaj dalej kontraktu
+                    except ValueError:
+                        pass
 
                 # ── Wygaśnięcie umowy ──
                 if now >= expires_at:

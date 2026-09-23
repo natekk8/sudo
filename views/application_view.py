@@ -389,55 +389,35 @@ class ForumApplicationView(ui.View):
             return await interaction.response.send_message(
                 "❌ Tylko Zarząd Federacji może zatwierdzić wniosek.", ephemeral=True)
 
-        await interaction.response.defer()
-
-        # ── Atomowy CAS: PENDING → PROCESSING (z auto-odblokowaniem przy awarii) ──
+        # ── Atomowy CAS: PENDING → PROCESSING ──
         app = database.try_claim_application_for_approval(self.app_id)
         if not app:
             existing = database.get_application(self.app_id)
-            if existing and existing.get("status") == "PROCESSING":
-                database.revert_application_status(self.app_id, "PENDING")
-                app = database.try_claim_application_for_approval(self.app_id)
-
-        if not app:
-            existing = database.get_application(self.app_id)
             if existing and existing.get("status") == "ACCEPTED":
-                try:
-                    embed = interaction.message.embeds[0]
-                    embed.color = 0x2ecc71
-                    embed.title = f"✅ Zaakceptowano: {existing.get('player_name') or existing.get('club_name') or 'Wniosek'}"
-                    await interaction.message.edit(embed=embed, view=None)
-                except Exception:
-                    pass
-                try:
-                    await self._archive_thread(interaction.channel)
-                except Exception:
-                    pass
-                return await interaction.followup.send(
-                    "✅ Ten wniosek został już wcześniej pomyślnie zatwierdzony w bazie (wątek zaktualizowany i zarchiwizowany).",
-                    ephemeral=True
-                )
+                return await interaction.response.send_message(
+                    "✅ Ten wniosek został już wcześniej pomyślnie zatwierdzony.", ephemeral=True)
+            elif existing and existing.get("status") == "PROCESSING":
+                return await interaction.response.send_message(
+                    "⏳ Ten wniosek jest obecnie przetwarzany przez innego członka zarządu.", ephemeral=True)
 
-            # Sprawdzenie czy embed na Discordzie nie jest już oznaczony jako zaakceptowany/odrzucony
-            if interaction.message and interaction.message.embeds:
-                emb = interaction.message.embeds[0]
-                e_title = emb.title or ""
-                if (emb.color and emb.color.value == 0x2ecc71) or e_title.startswith("✅"):
-                    try: await self._archive_thread(interaction.channel)
-                    except Exception: pass
-                    return await interaction.followup.send(
-                        "✅ Ten wniosek został już wcześniej zaakceptowany.", ephemeral=True)
-                if (emb.color and emb.color.value == 0xe74c3c) or e_title.startswith("❌"):
-                    try: await self._archive_thread(interaction.channel)
-                    except Exception: pass
-                    return await interaction.followup.send(
-                        "❌ Ten wniosek został wcześniej odrzucony.", ephemeral=True)
-
-            # Awaryjna rekonstrukcja wniosku bezpośrednio z embeda wiadomości
+            # Awaryjna rekonstrukcja wniosku
             app = _reconstruct_app_from_message(interaction.message, self.app_id, interaction.guild)
             if not app:
-                return await interaction.followup.send(
-                    "❌ Ten wniosek jest już przetwarzany lub został wcześniej zamknięty/odrzucony.", ephemeral=True)
+                return await interaction.response.send_message(
+                    "❌ Ten wniosek jest już przetwarzany lub został zamknięty.", ephemeral=True)
+
+        # ── Walidacja Zgód ──
+        if app.get("needs_player_agree") and not app.get("player_agreed"):
+            database.revert_application_status(self.app_id, "PENDING")
+            return await interaction.response.send_message("❌ Zawodnik jeszcze nie wyraził zgody!", ephemeral=True)
+        if app.get("needs_target_club_agree") and not app.get("target_club_agreed"):
+            database.revert_application_status(self.app_id, "PENDING")
+            return await interaction.response.send_message("❌ Klub kupujący/przyjmujący jeszcze nie wyraził zgody!", ephemeral=True)
+        if app.get("needs_source_club_agree") and not app.get("source_club_agreed"):
+            database.revert_application_status(self.app_id, "PENDING")
+            return await interaction.response.send_message("❌ Klub sprzedający/oddający jeszcze nie wyraził zgody!", ephemeral=True)
+
+        await interaction.response.defer()
 
         app_type = app.get("type")
         guild = interaction.guild
@@ -520,11 +500,19 @@ class ForumApplicationView(ui.View):
         # ─── PODPISANIE ───
         elif app_type == "PODPISANIE":
             target_club = clean_tag(app.get("target_club"))
-            if database.get_club_player_count(target_club) >= league_config.max_players():
+            current_count = database.get_club_player_count(target_club)
+            if current_count > league_config.max_players():
                 database.revert_application_status(self.app_id)
                 await interaction.followup.send(
-                    f"❌ Klub `{target_club}` osiągnął limit {league_config.max_players()}/{league_config.max_players()} graczy!", ephemeral=True)
+                    f"❌ Klub `{target_club}` osiągnął bezwzględny limit {league_config.max_players() + 1} graczy (razem z rezerwą)!", ephemeral=True)
                 return False
+
+            is_overflow = 1 if current_count >= league_config.max_players() else 0
+            slot_deadline = None
+            if is_overflow:
+                from datetime import datetime, timedelta
+                from utils.helpers import get_now_warsaw
+                slot_deadline = (get_now_warsaw() + timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
 
             gracz = app.get("player_name")
             dc_id = app.get("player_discord_id")
@@ -542,7 +530,7 @@ class ForumApplicationView(ui.View):
             database.add_or_update_player(
                 name=gracz, discord_id=dc_id, club_tag=target_club, parent_club_tag=target_club,
                 clause=app.get("clause", "Brak"), contract_type="BEZ_KLUBU",
-                expires_at=app.get("expires_at")
+                expires_at=app.get("expires_at"), is_overflow=is_overflow, slot_deadline=slot_deadline
             )
             database.add_transfer_history(gracz, dc_id, None, target_club, "PODPISANIE", None)
             database.set_application_status(self.app_id, "ACCEPTED")
@@ -576,11 +564,20 @@ class ForumApplicationView(ui.View):
         elif app_type == "TRANSFER":
             target_club = clean_tag(app.get("target_club"))
             source_club = clean_tag(app.get("source_club"))
-            if database.get_club_player_count(target_club) >= league_config.max_players():
+            
+            current_count = database.get_club_player_count(target_club)
+            if current_count > league_config.max_players():
                 database.revert_application_status(self.app_id)
                 await interaction.followup.send(
-                    f"❌ Klub `{target_club}` jest już pełny ({league_config.max_players()}/{league_config.max_players()})!", ephemeral=True)
+                    f"❌ Klub `{target_club}` osiągnął bezwzględny limit {league_config.max_players() + 1} graczy (razem z rezerwą)!", ephemeral=True)
                 return False
+
+            is_overflow = 1 if current_count >= league_config.max_players() else 0
+            slot_deadline = None
+            if is_overflow:
+                from datetime import datetime, timedelta
+                from utils.helpers import get_now_warsaw
+                slot_deadline = (get_now_warsaw() + timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
 
             gracz = app.get("player_name")
             dc_id = app.get("player_discord_id")
@@ -605,7 +602,7 @@ class ForumApplicationView(ui.View):
             database.add_or_update_player(
                 name=gracz, discord_id=dc_id, club_tag=target_club, parent_club_tag=target_club,
                 clause=app.get("clause", "Brak"), contract_type="TRANSFER",
-                expires_at=app.get("expires_at")
+                expires_at=app.get("expires_at"), is_overflow=is_overflow, slot_deadline=slot_deadline
             )
             transfer_type = "WYKUP" if app.get("is_buyout") else "TRANSFER"
             database.add_transfer_history(gracz, dc_id, source_club, target_club, transfer_type, app.get("amount"))
@@ -753,11 +750,20 @@ class ForumApplicationView(ui.View):
         elif app_type == "WYPOZYCZENIE":
             target_club = clean_tag(app.get("target_club"))
             source_club = clean_tag(app.get("source_club"))
-            if database.get_club_player_count(target_club) >= league_config.max_players():
+            
+            current_count = database.get_club_player_count(target_club)
+            if current_count > league_config.max_players():
                 database.revert_application_status(self.app_id)
                 await interaction.followup.send(
-                    f"❌ Klub `{target_club}` jest już pełny ({league_config.max_players()}/{league_config.max_players()})!", ephemeral=True)
+                    f"❌ Klub `{target_club}` osiągnął bezwzględny limit {league_config.max_players() + 1} graczy (razem z rezerwą)!", ephemeral=True)
                 return False
+
+            is_overflow = 1 if current_count >= league_config.max_players() else 0
+            slot_deadline = None
+            if is_overflow:
+                from datetime import datetime, timedelta
+                from utils.helpers import get_now_warsaw
+                slot_deadline = (get_now_warsaw() + timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
 
             gracz = app.get("player_name")
             dc_id = app.get("player_discord_id")
@@ -790,7 +796,8 @@ class ForumApplicationView(ui.View):
                 clause=parent_clause_val, contract_type="WYPOZYCZENIE",
                 expires_at=app.get("expires_at"),
                 parent_contract_expires_at=parent_expires,
-                parent_clause=parent_clause_val  # Ochrona klauzuli macierzystej
+                parent_clause=parent_clause_val,  # Ochrona klauzuli macierzystej
+                is_overflow=is_overflow, slot_deadline=slot_deadline
             )
             database.add_transfer_history(gracz, dc_id, source_club, target_club, "WYPOZYCZENIE", app.get("amount"))
             database.set_application_status(self.app_id, "ACCEPTED")
@@ -1121,21 +1128,36 @@ class ForumApplicationView(ui.View):
     def _update_status_field(self, embed: discord.Embed, app: dict) -> discord.Embed:
         if not app: return embed
         lines = []
-        if app.get("needs_player_agree") and app.get("player_discord_id"):
-            lines.append(f"• Zawodnik: {'✅ Udzielono' if app.get('player_agreed') else '⏳ Oczekuje'}")
-        else:
-            lines.append("• Zawodnik: ℹ️ Brak konta Discord")
+        
+        # ── Zawodnik ──
+        if app.get("needs_player_agree"):
+            if app.get("player_discord_id"):
+                lines.append(f"• Zawodnik: {'✅ Zgoda udzielona' if app.get('player_agreed') else '⏳ Oczekuje zgody'}")
+            else:
+                lines.append("• Zawodnik: ℹ️ Brak konta Discord (Powiadomienie)")
+        elif app.get("player_discord_id"):
+            pass
+
+        # ── Target Club ──
         target = app.get("target_club", "")
-        if app.get("needs_target_club_agree"):
-            lines.append(f"• Klub `{target}`: {'✅ Zgoda' if app.get('target_club_agreed') else '⏳ Oczekuje'}")
-        elif target:
-            lines.append(f"• Klub `{target}`: ℹ️ Brak kont DC zarządu")
+        if target:
+            if app.get("needs_target_club_agree"):
+                lines.append(f"• Klub `{target}`: {'✅ Zgoda udzielona' if app.get('target_club_agreed') else '⏳ Oczekuje zgody zarządu'}")
+            else:
+                lines.append(f"• Klub `{target}`: ℹ️ Brak wymogu zgody lub DC zarządu")
+
+        # ── Source Club ──
         source = app.get("source_club", "")
-        if source and app.get("needs_source_club_agree"):
-            lines.append(f"• Klub `{source}`: {'✅ Zgoda' if app.get('source_club_agreed') else '⏳ Oczekuje'}")
-        elif source and app.get("is_buyout"):
-            lines.append(f"• Klub `{source}`: ⚡ Wykup klauzulowy (zgoda zbędna)")
-        lines.append("• Zarząd Federacji: ⏳ Oczekuje")
+        if source:
+            if app.get("needs_source_club_agree"):
+                lines.append(f"• Klub `{source}`: {'✅ Zgoda udzielona' if app.get('source_club_agreed') else '⏳ Oczekuje zgody zarządu'}")
+            elif app.get("is_buyout"):
+                lines.append(f"• Klub `{source}`: ⚡ Zgoda zbędna (wykup klauzulowy)")
+            else:
+                lines.append(f"• Klub `{source}`: ℹ️ Brak wymogu zgody lub DC zarządu")
+
+        lines.append("• Zarząd Federacji: ⏳ Oczekuje na ostateczną decyzję")
+        
         new_val = "\n".join(lines)
         for i, f in enumerate(embed.fields):
             if f.name == "Status":

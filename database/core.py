@@ -91,6 +91,8 @@ def _migrate_columns(cursor):
         "warned_7d": "INTEGER DEFAULT 0",
         "warned_3d": "INTEGER DEFAULT 0",
         "warned_1d": "INTEGER DEFAULT 0",
+        "is_overflow": "INTEGER DEFAULT 0",
+        "slot_deadline": "TEXT",
     }.items():
         if col not in players_cols:
             cursor.execute(f"ALTER TABLE players ADD COLUMN {col} {typ}")
@@ -147,7 +149,9 @@ def init_db():
                     parent_contract_expires_at TEXT,
                     warned_7d INTEGER DEFAULT 0,
                     warned_3d INTEGER DEFAULT 0,
-                    warned_1d INTEGER DEFAULT 0
+                    warned_1d INTEGER DEFAULT 0,
+                    is_overflow INTEGER DEFAULT 0,
+                    slot_deadline TEXT
                 )
             """)
 
