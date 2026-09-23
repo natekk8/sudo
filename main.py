@@ -45,13 +45,13 @@ async def setup_panel(interaction: discord.Interaction):
     embed1 = discord.Embed(
         title="📋 Transfery i Kontrakty — FSS",
         description=(
-            "Oficjalne procesy transferowo-kontraktowe Federacji Siatkówki Stołowej. "
+            "Oficjalne procesy transferowo-kontraktowe Federacji Siatkówki Stołowej.\n"
             "Po kliknięciu przycisku bot otworzy **prywatny kanał ticketu**, gdzie odpiszesz na pytania.\n\n"
-            f"**👤 Podpisanie Gracza** · Rejestracja wolnego agenta (limit: **{mx}** zawodników w klubie)\n"
-            "**🤝 Wniosek Transferowy / Wymiana** · Kupno zawodnika z innego klubu lub wymiana zawodnikami między klubami z opcjonalną dopłatą\n"
-            "**⏱️ Wypożyczenie** · Czasowe przejście zawodnika do innego klubu z automatycznym powrotem\n\n"
+            f"**👤 Podpisanie Gracza** · Rejestracja wolnego agenta (limit: **{mx}** + opcjonalny 4. zawodnik na 5 dni)\n"
+            "**🤝 Wniosek Transferowy / Wymiana** · Kupno zawodnika lub wymiana z dopłatą. Możliwe wzięcie 4. zawodnika (5 dni na zwolnienie miejsca)\n"
+            "**⏱️ Wypożyczenie** · Czasowe przejście zawodnika do innego klubu z opcją 4. zawodnika\n\n"
             "**📄 Aneks do Umowy** · Przedłużenie wygasającego kontraktu lub zmiana klauzuli wykupu\n"
-            "**❌ Rozwiązanie Umowy** · Za porozumieniem stron lub tryb dyscyplinarny"
+            "**❌ Rozwiązanie Umowy** · W trakcie trwania kontraktu możliwe **wyłącznie za obopólną zgodą** (porozumienie stron)"
         ),
         color=0x2b2d31
     )
@@ -60,16 +60,16 @@ async def setup_panel(interaction: discord.Interaction):
 
     # ── Panel 2: Rynek Transferowy ───────────────────────────────────────────
     embed2 = discord.Embed(
-        title="📊 Giełda Graczy — FSS",
+        title="📊 Baza Rezerwowa i Składy — FSS",
         description=(
-            "Giełda wolnych agentów i baza składów Federacji Siatkówki Stołowej.\n\n"
-            "**🙋 Szukam Klubu**\n"
-            "Zarejestruj się jako wolny agent — Twoje zgłoszenie będzie widoczne dla zarządów szukających zawodników. "
-            "Kliknięcie ponownie usuwa Cię z listy.\n\n"
+            "Baza Rezerwowa wolnych agentów i oficjalne składy.\n\n"
+            "**🙋 Dołącz do Rezerwy**\n"
+            "» Zawodnik bez klubu: rejestracja do bazy rezerw (ponowne kliknięcie wypisuje).\n"
+            "» Zarząd: szybkie ręczne wpisanie/wyrzucenie zawodnika do wolnych agentów.\n\n"
             "**🔍 Szukam Zawodnika**\n"
-            "Przeglądaj listę zarejestrowanych wolnych agentów szukających nowej drużyny.\n\n"
+            "Przeglądaj listę wszystkich zawodników czekających w Bazie Rezerwowej.\n\n"
             "**📋 Składy Drużyn**\n"
-            "Sprawdź pełne kadry wszystkich zarejestrowanych klubów z wizualnym paskiem zapełnienia."
+            "Sprawdź aktualne kadry klubów, wykorzystane limity oraz ważne daty kontraktów."
         ),
         color=0x1e1f22
     )
@@ -80,10 +80,10 @@ async def setup_panel(interaction: discord.Interaction):
     embed3 = discord.Embed(
         title="🏛️ Biuro Federacji Siatkówki Stołowej",
         description=(
-            "Oficjalne sprawy administracyjne FSS — rejestracja, zarządzanie klubem oraz wnioski ogólne do Zarządu Federacji.\n\n"
-            "**📝 Rejestracja Klubu** · Złóż wniosek o dołączenie nowej drużyny do rozgrywek FSS\n"
-            "**⚙️ Zarządzanie Klubem** · Zmiana nazwy, TAGu, właściciela lub składu zarządu; likwidacja klubu\n\n"
-            "**📨 Złóż Wniosek Ogólny** · Inne sprawy kierowane do Zarządu Federacji — przełożenie meczu, reklamacja decyzji, zapytania regulaminowe i inne"
+            "Oficjalne sprawy administracyjne FSS — rejestracja, zarządzanie klubem oraz ogólny kontakt z Zarządem.\n\n"
+            "**📝 Rejestracja Klubu** · Złóż wniosek o utworzenie i dołączenie nowej drużyny\n"
+            "**⚙️ Zarządzanie Klubem** · Zmień nazwę, TAG, właściciela, zarząd lub zlikwiduj klub\n\n"
+            "**📨 Złóż Wniosek Ogólny** · Wszelkie inne sprawy do Federacji (np. przełożenie meczu, odwołania, zapytania)"
         ),
         color=0x3d5a80
     )

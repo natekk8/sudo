@@ -200,7 +200,7 @@ class SetupCog(commands.Cog):
                 return await interaction.response.send_message("❌ Wartość musi być od **1** do **25**.", ephemeral=True)
             cfg.set_config("cfg_max_players", str(liczba))
             await interaction.response.send_message(
-                embed=_ok(f"Max graczy w klubie zmienione na **{liczba}**.\nLimit będzie widoczny w panelu po ponownym wysłaniu `!setup_panel`."),
+                embed=_ok(f"Max graczy w klubie zmienione na **{liczba}**.\nLimit będzie widoczny w panelu po ponownym wysłaniu `/setup_panel`."),
                 ephemeral=True
             )
 
