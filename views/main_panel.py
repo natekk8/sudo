@@ -27,7 +27,7 @@ class WidokTransferowIKontraktow(ui.View):
         if not database.is_market_open():
             return await interaction.response.send_message(_RYNEK_ZAMKNIETY, ephemeral=True)
         await interaction.response.defer(ephemeral=True)
-        from services.ticket_flows import proces_podpisania
+        from services.flows import proces_podpisania
         interaction.client.loop.create_task(proces_podpisania(interaction))
 
     @ui.button(label="Wniosek Transferowy / Wymiana", style=discord.ButtonStyle.secondary,
@@ -36,7 +36,7 @@ class WidokTransferowIKontraktow(ui.View):
         if not database.is_market_open():
             return await interaction.response.send_message(_RYNEK_ZAMKNIETY, ephemeral=True)
         await interaction.response.defer(ephemeral=True)
-        from services.ticket_flows import proces_transferu
+        from services.flows import proces_transferu
         interaction.client.loop.create_task(proces_transferu(interaction))
 
     @ui.button(label="Wypożyczenie", style=discord.ButtonStyle.secondary,
@@ -45,7 +45,7 @@ class WidokTransferowIKontraktow(ui.View):
         if not database.is_market_open():
             return await interaction.response.send_message(_RYNEK_ZAMKNIETY, ephemeral=True)
         await interaction.response.defer(ephemeral=True)
-        from services.ticket_flows import proces_wypozyczenia
+        from services.flows import proces_wypozyczenia
         interaction.client.loop.create_task(proces_wypozyczenia(interaction))
 
     # Rzad 1: zarzadzanie kontraktami
@@ -54,14 +54,14 @@ class WidokTransferowIKontraktow(ui.View):
                emoji="📄", custom_id="p_aneks", row=1)
     async def b_aneks(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
-        from services.ticket_flows import proces_aneksu
+        from services.flows import proces_aneksu
         interaction.client.loop.create_task(proces_aneksu(interaction))
 
     @ui.button(label="Rozwiązanie Umowy", style=discord.ButtonStyle.danger,
                emoji="❌", custom_id="p_rozw", row=1)
     async def b_rozw(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
-        from services.ticket_flows import proces_rozwiazania
+        from services.flows import proces_rozwiazania
         interaction.client.loop.create_task(proces_rozwiazania(interaction))
 
 
@@ -79,21 +79,21 @@ class WidokAdministracjiKlubow(ui.View):
                emoji="📝", custom_id="p_klub", row=0)
     async def b_klub(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
-        from services.ticket_flows import proces_rejestracji_klubu
+        from services.flows import proces_rejestracji_klubu
         interaction.client.loop.create_task(proces_rejestracji_klubu(interaction))
 
     @ui.button(label="Zarządzanie Klubem", style=discord.ButtonStyle.secondary,
                emoji="⚙️", custom_id="p_klub_manage", row=0)
     async def b_klub_manage(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
-        from services.ticket_flows import proces_zarzadzania_klubem
+        from services.flows import proces_zarzadzania_klubem
         interaction.client.loop.create_task(proces_zarzadzania_klubem(interaction))
 
     @ui.button(label="Złóż Wniosek Ogólny", style=discord.ButtonStyle.secondary,
                emoji="📨", custom_id="p_wniosek_ogolny", row=0)
     async def b_wniosek_ogolny(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
-        from services.ticket_flows import proces_wniosku_ogolnego
+        from services.flows import proces_wniosku_ogolnego
         interaction.client.loop.create_task(proces_wniosku_ogolnego(interaction))
 
 

@@ -117,7 +117,7 @@ class WidokRynkuTransferowego(ui.View):
                 break
 
         if is_admin or user_is_board:
-            from services.ticket_flows import proces_dodania_do_rezerwy
+            from services.flows import proces_dodania_do_rezerwy
             return await proces_dodania_do_rezerwy(interaction, interaction.client)
 
         existing = database.get_player_by_discord_id(user.id)
