@@ -38,7 +38,7 @@ class TicketControlView(ui.View):
 
 async def _create_ticket_channel(guild: discord.Guild, user: discord.Member, prefix: str) -> discord.TextChannel:
     overwrites = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False, send_messages=False),
+        guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
         user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
         guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True)
     }
@@ -51,7 +51,13 @@ async def _create_ticket_channel(guild: discord.Guild, user: discord.Member, pre
         category = discord.utils.get(guild.categories, name="TICKETY FSS")
         if not category and hasattr(guild, "create_category"):
             try:
-                category = await guild.create_category("TICKETY FSS")
+                category = await guild.create_category(
+                    "TICKETY FSS",
+                    overwrites={
+                        guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
+                        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True)
+                    }
+                )
             except Exception:
                 category = None
 

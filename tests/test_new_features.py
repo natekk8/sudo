@@ -187,6 +187,35 @@ class TestNewFeatures(unittest.IsolatedAsyncioTestCase):
         app_after = database.get_application(app_id)
         self.assertEqual(app_after.get("new_board_txt"), "AGREED")
 
+    async def test_create_ticket_channel_permissions(self):
+        from services.flows.shared import _create_ticket_channel
+        guild = MagicMock()
+        guild.default_role = MagicMock()
+        guild.me = MagicMock()
+        user = MagicMock()
+        user.mention = "<@123>"
+        guild.get_role.return_value = None
+        guild.categories = []
+        guild.create_category = AsyncMock(return_value=None)
+        created_channel = AsyncMock()
+        guild.create_text_channel = AsyncMock(return_value=created_channel)
+
+        chan = await _create_ticket_channel(guild, user, "test")
+        guild.create_text_channel.assert_awaited_once()
+        _, kwargs = guild.create_text_channel.await_args
+        overwrites = kwargs["overwrites"]
+
+        # @everyone musi mieć view_channel=True, ale send_messages=False
+        def_ov = overwrites[guild.default_role]
+        self.assertTrue(def_ov.view_channel)
+        self.assertFalse(def_ov.send_messages)
+
+        # Użytkownik i bot muszą mieć view_channel=True i send_messages=True
+        self.assertTrue(overwrites[user].view_channel)
+        self.assertTrue(overwrites[user].send_messages)
+        self.assertTrue(overwrites[guild.me].view_channel)
+        self.assertTrue(overwrites[guild.me].send_messages)
+
 
 if __name__ == '__main__':
     unittest.main()
