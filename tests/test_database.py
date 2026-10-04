@@ -221,4 +221,78 @@ class TestDatabase(unittest.TestCase):
         self.assertIsNone(database.get_setting("cfg_max_players"))
         self.assertIsNotNone(database.get_club("KLU"))
 
+    def test_transfer_list_crud_and_sorting(self):
+        database.add_club("FCB", "FC Barcelona", 1, 2)
+        database.add_club("RMA", "Real Madrid", 3, 4)
+        database.add_or_update_player("Messi", 10, "FCB", None, "Brak", "Professional", "2026-12-31")
+        database.add_or_update_player("Pedri", 11, "FCB", None, "Brak", "Professional", "2026-12-31")
+        database.add_or_update_player("Vinicius", 20, "RMA", None, "Brak", "Professional", "2026-12-31")
+
+        # Dodanie do listy transferowej
+        database.add_to_transfer_list("Messi", "FCB", 100_000, discord_id=10, listed_by=1, note="Do negocjacji")
+        database.add_to_transfer_list("Pedri", "FCB", 50_000, discord_id=11, listed_by=1, note="Szybka sprzedaż")
+        database.add_to_transfer_list("Vinicius", "RMA", 200_000, discord_id=20, listed_by=3, note="Tylko gotówka")
+
+        self.assertEqual(database.count_transfer_list(), 3)
+        self.assertEqual(database.count_transfer_list("FCB"), 2)
+        self.assertEqual(database.count_transfer_list("RMA"), 1)
+
+        # Pobieranie pojedynczego wpisu (case-insensitive)
+        entry = database.get_transfer_list_entry("messi")
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["price"], 100_000)
+        self.assertEqual(entry["note"], "Do negocjacji")
+
+        # Lista posortowana cenowo rosnąco
+        tlist = database.get_transfer_list()
+        self.assertEqual(len(tlist), 3)
+        self.assertEqual(tlist[0]["player_name"], "Pedri")
+        self.assertEqual(tlist[1]["player_name"], "Messi")
+        self.assertEqual(tlist[2]["player_name"], "Vinicius")
+
+        # Aktualizacja ceny i notatki
+        database.add_to_transfer_list("Pedri", "FCB", 150_000, discord_id=11, listed_by=1, note="Zaktualizowana cena")
+        updated = database.get_transfer_list_entry("Pedri")
+        self.assertEqual(updated["price"], 150_000)
+        self.assertEqual(updated["note"], "Zaktualizowana cena")
+
+        # Usunięcie z listy
+        removed = database.remove_from_transfer_list("Messi")
+        self.assertTrue(removed)
+        self.assertIsNone(database.get_transfer_list_entry("Messi"))
+        self.assertEqual(database.count_transfer_list(), 2)
+
+    def test_transfer_list_cascades(self):
+        database.add_club("FCB", "FC Barcelona", 1, 2)
+        database.add_or_update_player("Gavi", 12, "FCB", None, "Brak", "Professional", "2026-12-31")
+        database.add_to_transfer_list("Gavi", "FCB", 80_000, discord_id=12, listed_by=1, note="Talent")
+        self.assertIsNotNone(database.get_transfer_list_entry("Gavi"))
+
+        # 1. Rebrand klubu - aktualizacja tagu
+        database.rebrand_club("FCB", "BAR", "Barcelona Rebrand")
+        entry = database.get_transfer_list_entry("Gavi")
+        self.assertEqual(entry["club_tag"], "BAR")
+
+        # 2. Rozwiązanie kontraktu - automatyczne usunięcie z listy
+        database.terminate_player_contract("Gavi")
+        self.assertIsNone(database.get_transfer_list_entry("Gavi"))
+
+        # 3. Usunięcie klubu - wyczyszczenie wpisów
+        database.add_or_update_player("Lewy", 13, "BAR", None, "Brak", "Professional", "2026-12-31")
+        database.add_to_transfer_list("Lewy", "BAR", 90_000, discord_id=13, listed_by=1, note="")
+        self.assertIsNotNone(database.get_transfer_list_entry("Lewy"))
+        database.delete_club("BAR", terminate_players=True)
+        self.assertIsNone(database.get_transfer_list_entry("Lewy"))
+
+    def test_transfer_list_cleanup_orphans(self):
+        database.add_club("FCB", "FC Barcelona", 1, 2)
+        # Bezpośrednie dodanie sieroty (gracz nieistniejący w players)
+        database.add_to_transfer_list("GhostPlayer", "FCB", 10_000, discord_id=999, listed_by=1, note="")
+        self.assertEqual(database.count_transfer_list(valid_only=False), 1)
+        self.assertEqual(database.count_transfer_list(valid_only=True), 0)
+        cleaned = database.cleanup_transfer_list()
+        self.assertEqual(cleaned, 1)
+        self.assertEqual(database.count_transfer_list(valid_only=False), 0)
+
+
 

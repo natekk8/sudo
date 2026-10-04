@@ -4,7 +4,7 @@ import discord
 from discord import ui
 import database
 import utils.league_config as league_config
-from utils.helpers import *
+from utils.helpers import clean_tag
 from views.confirmation import WniosekConfirmView
 from views.application_view import ForumApplicationView
 from .shared import _create_ticket_channel, _safe_delete_channel, _zadaj_pytanie, _send_forum_application, _check_spam
@@ -69,7 +69,7 @@ async def proces_wniosku_ogolnego(interaction: discord.Interaction):
             new_board_txt=tresc  # przechowujemy treść w wolnym polu tekstowym
         )
         await _send_forum_application(guild, kanal, embed,
-                                       f"[WNIOSEK] {temat[:40]}", app_id)
+                                       f"[WNIOSEK] {temat[:40]}", app_id, client=client)
 
     except TimeoutError:
         pass

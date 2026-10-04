@@ -57,6 +57,10 @@ def add_or_update_player(name: str, discord_id: int, club_tag: str, parent_club_
                 parent_contract_expires_at, warned_7d, warned_3d, warned_1d,
                 is_overflow, slot_deadline
             ))
+            if club_tag:
+                cursor.execute(
+                    "DELETE FROM transfer_list WHERE player_name = ? COLLATE NOCASE AND UPPER(club_tag) != ?",
+                    (name, club_tag.strip().upper()))
             conn.commit()
 
 def extend_player_contract(name: str, expires_at: str, clause: str, discord_id: int = None):
@@ -82,8 +86,10 @@ def terminate_player_contract(name: str, discord_id: int = None):
         with get_connection() as conn:
             cursor = conn.cursor()
             if discord_id:
+                cursor.execute("DELETE FROM transfer_list WHERE discord_id = ? OR player_name = ? COLLATE NOCASE", (discord_id, name))
                 cursor.execute("DELETE FROM players WHERE discord_id = ? OR name = ? COLLATE NOCASE", (discord_id, name))
             else:
+                cursor.execute("DELETE FROM transfer_list WHERE player_name = ? COLLATE NOCASE", (name,))
                 cursor.execute("DELETE FROM players WHERE name = ? COLLATE NOCASE", (name,))
             conn.commit()
 
@@ -127,8 +133,10 @@ def delete_player(name: str, discord_id: int = None):
         with get_connection() as conn:
             cursor = conn.cursor()
             if discord_id:
+                cursor.execute("DELETE FROM transfer_list WHERE discord_id = ? OR player_name = ? COLLATE NOCASE", (discord_id, name))
                 cursor.execute("DELETE FROM players WHERE discord_id = ? OR name = ? COLLATE NOCASE", (discord_id, name))
             else:
+                cursor.execute("DELETE FROM transfer_list WHERE player_name = ? COLLATE NOCASE", (name,))
                 cursor.execute("DELETE FROM players WHERE name = ? COLLATE NOCASE", (name,))
             conn.commit()
 
@@ -136,6 +144,13 @@ def get_all_players() -> list:
     with get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM players")
+        return [dict(r) for r in cursor.fetchall()]
+
+def get_expiring_or_overflow_players() -> list:
+    """Zwraca tylko zawodników z ustawioną datą wygaśnięcia kontraktu lub flagą is_overflow."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM players WHERE expires_at IS NOT NULL OR is_overflow = 1")
         return [dict(r) for r in cursor.fetchall()]
 
 def set_player_warning_flag(name: str, flag: str):
@@ -146,3 +161,10 @@ def set_player_warning_flag(name: str, flag: str):
             cursor = conn.cursor()
             cursor.execute(f"UPDATE players SET {flag} = 1 WHERE name = ?", (name,))
             conn.commit()
+
+def get_club_player_counts() -> dict:
+    """Liczba zawodników per klub (jedno zapytanie zamiast N) - {TAG: count}."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT UPPER(club_tag) AS tag, COUNT(*) AS cnt FROM players GROUP BY UPPER(club_tag)")
+        return {r["tag"]: r["cnt"] for r in cursor.fetchall()}

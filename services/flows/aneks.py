@@ -4,7 +4,10 @@ import discord
 from discord import ui
 import database
 import utils.league_config as league_config
-from utils.helpers import *
+from utils.helpers import (
+    clean_player_name, clean_tag, is_club_board_or_owner, is_federation,
+    parse_expiry_date, resolve_player_identity, send_dm, validate_amount_input
+)
 from views.confirmation import WniosekConfirmView
 from views.application_view import ForumApplicationView
 from .shared import _create_ticket_channel, _safe_delete_channel, _zadaj_pytanie, _send_forum_application, _check_spam
@@ -104,7 +107,7 @@ async def proces_aneksu(interaction: discord.Interaction):
             needs_player_agree=bool(player_dc_id)
         )
         thread = await _send_forum_application(guild, kanal, embed,
-                                                f"[ANEKS] {user_club} – {real_name}", app_id, ping_target=user_club)
+                                                f"[ANEKS] {user_club} – {real_name}", app_id, ping_target=user_club, client=client)
         if player_dc_id:
             await send_dm(client, player_dc_id,
                           f"📩 Klub `{user_club}` złożył wniosek o aneks do Twojego kontraktu!\n🔗 {thread.jump_url}")

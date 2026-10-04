@@ -13,6 +13,15 @@ except Exception:
     from datetime import timezone, timedelta
     WARSAW_TZ = timezone(timedelta(hours=1))
 
+_BOT_INSTANCE = None
+
+def set_bot(bot_instance: discord.Client):
+    global _BOT_INSTANCE
+    _BOT_INSTANCE = bot_instance
+
+def get_bot() -> discord.Client | None:
+    return _BOT_INSTANCE
+
 def get_now_warsaw() -> datetime:
     try:
         return datetime.now(WARSAW_TZ).replace(tzinfo=None)
@@ -124,17 +133,23 @@ async def get_or_fetch_member(guild: discord.Guild, user_id: int):
     except (discord.NotFound, discord.HTTPException):
         return None
 
+TICKET_PREFIXES = (
+    "rejestracja-", "kontrakt-", "transfer-", "wypozyczenie-",
+    "aneks-", "rozwiazanie-", "rebrand-", "zarzadzanie-", "wniosek-"
+)
+
+def is_admin_or_federation(member: discord.Member) -> bool:
+    if not member: return False
+    return is_federation(member) or bool(getattr(member, "guild_permissions", None) and member.guild_permissions.administrator)
+
 def has_open_ticket(guild: discord.Guild, user_id: int) -> bool:
-    if not guild: return False
+    if not guild or not user_id: return False
     for channel in guild.text_channels:
         overwrites = channel.overwrites
         for target, overwrite in overwrites.items():
-            if isinstance(target, discord.Member) and target.id == user_id:
+            if getattr(target, "id", None) == user_id:
                 if overwrite.view_channel and overwrite.send_messages:
-                    prefixes = ("rejestracja-", "kontrakt-", "transfer-", "wypozyczenie-",
-                                "aneks-", "rozwiazanie-", "rebrand-", "zarzadzanie-",
-                                "wniosek-", "rezerwa-")
-                    if any(channel.name.startswith(p) for p in prefixes):
+                    if any(channel.name.startswith(p) for p in TICKET_PREFIXES):
                         return True
     return False
 
@@ -212,6 +227,29 @@ def validate_amount_input(text: str) -> bool:
     if t.lower() == 'brak': return True
     return bool(re.match(r'^\d+$', t))
 
+MAX_PRICE = 1_000_000_000
+
+def parse_price_input(text: str) -> int | None:
+    """Cena z listy transferowej. `0` / `Brak` / `Do negocjacji` => 0. Zwraca None gdy niepoprawna."""
+    if text is None: return None
+    t = re.sub(r'[\s,.]', '', str(text).strip().lower())
+    if t in ("brak", "negocjacje", "donegocjacji", "0"):
+        return 0
+    if re.match(r'^\d+$', t):
+        value = int(t)
+        return value if value <= MAX_PRICE else None
+    return None
+
+def format_price(price) -> str:
+    """5000 -> `5 000`; 0/None -> `do negocjacji`."""
+    try:
+        price = int(price or 0)
+    except (TypeError, ValueError):
+        return str(price)
+    if price <= 0:
+        return "do negocjacji"
+    return f"{price:,}".replace(",", " ")
+
 def format_expiry_discord(expires_at: str) -> str:
     if not expires_at: return "Brak"
     try:
@@ -238,8 +276,10 @@ def build_squad_bar(count: int, max_count: int) -> str:
     label = "Kadra pełna ⛔" if count >= max_count else f"{max_count - count} wolne miejsc{'a' if max_count - count > 1 else 'e'}"
     return f"`[{filled}{empty}] {count}/{max_count}` · {label}"
 
-async def get_komunikaty_channel(client: discord.Client, guild: discord.Guild = None) -> discord.TextChannel | None:
-    if not client: return None
+async def get_komunikaty_channel(client: discord.Client = None, guild: discord.Guild = None) -> discord.TextChannel | None:
+    client = client or get_bot()
+    if not client:
+        return None
     # Dynamiczny ID kanału (DB → env fallback)
     try:
         import utils.league_config as lc
@@ -320,3 +360,48 @@ async def announce_market_change(client: discord.Client, message: str, guild: di
             await channel.send(message, allowed_mentions=discord.AllowedMentions.none())
         except Exception as e:
             print(f"[announce_market_change] Błąd wysyłania komunikatu: {e}")
+
+
+async def get_audit_channel(client: discord.Client = None, guild: discord.Guild = None) -> discord.TextChannel | None:
+    client = client or get_bot()
+    if not client:
+        return None
+    try:
+        import utils.league_config as lc
+        chan_id = lc.channel_audit_id()
+    except Exception:
+        chan_id = 0
+    if not chan_id:
+        return None
+    channel = client.get_channel(chan_id)
+    if not channel and guild:
+        channel = guild.get_channel(chan_id)
+    if not channel:
+        try:
+            channel = await client.fetch_channel(chan_id)
+        except Exception as e:
+            print(f"[Audyt] Nie można pobrać kanału audytu {chan_id}: {e}")
+    return channel
+
+
+async def send_audit_log(client: discord.Client = None, guild: discord.Guild = None,
+                         title: str = "Zdarzenie systemowe", description: str = "",
+                         color: int = 0x3498db, fields: list = None):
+    """Wysyła ustandaryzowany wpis audytowy do skonfigurowanego kanału audytu."""
+    try:
+        chan = await get_audit_channel(client, guild)
+        if not chan:
+            return
+        embed = discord.Embed(
+            title=f"🛡️ AUDYT: {title}",
+            description=description,
+            color=color,
+            timestamp=get_now_warsaw()
+        )
+        if fields:
+            for fname, fval, inline in fields:
+                embed.add_field(name=fname, value=str(fval)[:1024], inline=inline)
+        embed.set_footer(text="System Audytu FSS")
+        await chan.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    except Exception as e:
+        print(f"[send_audit_log] Błąd wysyłania wpisu audytu: {e}")

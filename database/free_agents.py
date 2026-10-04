@@ -1,15 +1,15 @@
 from datetime import datetime
 from database.core import get_connection, _lock
 
-def register_free_agent(discord_id: int, player_name: str):
+def register_free_agent(discord_id: int, player_name: str, position: str = "UNI", platform: str = "ALL"):
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
             date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute("""
-                INSERT OR REPLACE INTO free_agents (discord_id, player_name, registered_at)
-                VALUES (?, ?, ?)
-            """, (discord_id, player_name, date))
+                INSERT OR REPLACE INTO free_agents (discord_id, player_name, position, platform, registered_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (discord_id, player_name, position or "UNI", platform or "ALL", date))
             conn.commit()
 
 def remove_free_agent(discord_id: int):

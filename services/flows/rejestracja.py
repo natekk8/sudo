@@ -4,7 +4,7 @@ import discord
 from discord import ui
 import database
 import utils.league_config as league_config
-from utils.helpers import *
+from utils.helpers import clean_tag, is_valid_tag
 from views.confirmation import WniosekConfirmView
 from views.application_view import ForumApplicationView
 from .shared import _create_ticket_channel, _safe_delete_channel, _zadaj_pytanie, _send_forum_application, _check_spam
@@ -59,7 +59,7 @@ async def proces_rejestracji_klubu(interaction: discord.Interaction):
             app_type="REJESTRACJA_KLUBU", applicant_id=user.id,
             club_name=nazwa, club_tag=skrot, founder_txt=wlasciciel, board_txt=zarzad
         )
-        await _send_forum_application(guild, kanal, embed, f"[{skrot}] Rejestracja: {nazwa}", app_id)
+        await _send_forum_application(guild, kanal, embed, f"[{skrot}] Rejestracja: {nazwa}", app_id, client=client)
 
     except TimeoutError:
         pass

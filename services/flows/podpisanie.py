@@ -4,7 +4,10 @@ import discord
 from discord import ui
 import database
 import utils.league_config as league_config
-from utils.helpers import *
+from utils.helpers import (
+    clean_tag, is_club_board_or_owner, is_federation,
+    parse_expiry_date, resolve_player_identity, send_dm, validate_amount_input
+)
 from views.confirmation import WniosekConfirmView
 from views.application_view import ForumApplicationView
 from .shared import _create_ticket_channel, _safe_delete_channel, _zadaj_pytanie, _send_forum_application, _check_spam
@@ -32,8 +35,10 @@ async def proces_podpisania(interaction: discord.Interaction):
         embed_start.set_footer(text=f"{league_config.league_name()} • Biuro")
         await kanal.send(embed=embed_start)
 
+        is_fed = is_federation(user) or (getattr(user, "guild_permissions", None) and user.guild_permissions.administrator)
         while True:
-            kup = clean_tag(await _zadaj_pytanie(kanal, user, "Podaj skrót TWOJEGO KLUBU (kupującego):", client))
+            pyt = "Podaj skrót klubu kupującego (np. `FCZ`):" if is_fed else "Podaj skrót TWOJEGO KLUBU (kupującego):"
+            kup = clean_tag(await _zadaj_pytanie(kanal, user, pyt, client))
             if not database.get_club(kup):
                 await kanal.send(embed=discord.Embed(description="❌ Klub nie istnieje!", color=0xe74c3c))
             elif not is_club_board_or_owner(user, kup):
@@ -106,7 +111,7 @@ async def proces_podpisania(interaction: discord.Interaction):
             target_club=kup, clause=klauz, expires_at=wazny_do,
             needs_player_agree=needs_player, needs_target_club_agree=needs_target
         )
-        thread = await _send_forum_application(guild, kanal, embed, f"[{kup}] Nowy Gracz: {clean_name}", app_id, ping_target=kup)
+        thread = await _send_forum_application(guild, kanal, embed, f"[{kup}] Nowy Gracz: {clean_name}", app_id, ping_target=kup, client=client)
         if player_dc_id:
             await send_dm(client, player_dc_id,
                           f"📩 Klub `{kup}` złożył wniosek o Twoje podpisanie w Federacji Siatkówki Stołowej (FSS)!\n🔗 {thread.jump_url}")

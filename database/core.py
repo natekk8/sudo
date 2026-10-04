@@ -14,13 +14,22 @@ def _is_test_env() -> bool:
     return "test" in db_name or "temp" in db_name
 
 def sync_persistent_backup():
-    """Tworzy bezpieczną kopię bazy produkcyjnej do PERSISTENT_BACKUP_PATH."""
+    """Tworzy bezpieczną kopię bazy produkcyjnej do PERSISTENT_BACKUP_PATH za pomocą SQLite Backup API."""
     if _is_test_env():
         return
     try:
         db_path = getattr(config, "DB_PATH", "liga.db")
         if os.path.exists(db_path) and os.path.getsize(db_path) > 0:
-            shutil.copy2(db_path, PERSISTENT_BACKUP_PATH)
+            with _lock:
+                src_conn = sqlite3.connect(db_path, timeout=10.0)
+                try:
+                    dst_conn = sqlite3.connect(PERSISTENT_BACKUP_PATH, timeout=10.0)
+                    try:
+                        src_conn.backup(dst_conn)
+                    finally:
+                        dst_conn.close()
+                finally:
+                    src_conn.close()
     except Exception as e:
         print(f"[DB] Błąd tworzenia trwałego backupu: {e}")
 
@@ -34,16 +43,19 @@ def _try_restore_from_persistent():
             return
 
         # Sprawdź czy persistent ma tabele i dane
-        p_conn = sqlite3.connect(PERSISTENT_BACKUP_PATH)
-        p_cur = p_conn.cursor()
         p_clubs = 0
         p_players = 0
+        p_conn = None
         try:
+            p_conn = sqlite3.connect(PERSISTENT_BACKUP_PATH, timeout=5.0)
+            p_cur = p_conn.cursor()
             p_clubs = p_cur.execute("SELECT COUNT(*) FROM clubs").fetchone()[0]
             p_players = p_cur.execute("SELECT COUNT(*) FROM players").fetchone()[0]
         except Exception:
             pass
-        p_conn.close()
+        finally:
+            if p_conn:
+                p_conn.close()
 
         if p_clubs == 0 and p_players == 0:
             return
@@ -51,16 +63,19 @@ def _try_restore_from_persistent():
         # Sprawdź czy obecna baza DB_PATH ma dane
         current_has_data = False
         if os.path.exists(db_path):
+            c_conn = None
             try:
-                c_conn = sqlite3.connect(db_path)
+                c_conn = sqlite3.connect(db_path, timeout=5.0)
                 c_cur = c_conn.cursor()
                 c_clubs = c_cur.execute("SELECT COUNT(*) FROM clubs").fetchone()[0]
                 c_players = c_cur.execute("SELECT COUNT(*) FROM players").fetchone()[0]
-                c_conn.close()
                 if c_clubs > 0 or c_players > 0:
                     current_has_data = True
             except Exception:
                 pass
+            finally:
+                if c_conn:
+                    c_conn.close()
 
         if not current_has_data:
             print(f"[DB] WYKRYTO PUSTĄ BAZĘ {db_path}! Przywracanie z trwałego backupu {PERSISTENT_BACKUP_PATH} ({p_clubs} klubów, {p_players} graczy)...")
@@ -227,7 +242,30 @@ def init_db():
                 )
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS transfer_list (
+                    player_name TEXT PRIMARY KEY COLLATE NOCASE,
+                    discord_id INTEGER,
+                    club_tag TEXT NOT NULL,
+                    price INTEGER NOT NULL DEFAULT 0,
+                    note TEXT,
+                    listed_by INTEGER,
+                    listed_at TEXT NOT NULL
+                )
+            """)
+
             _migrate_columns(cursor)
+
+            # Indeksy przyspieszające najczęstsze zapytania (pętla wygasań, panele, walidacje)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_players_discord ON players(discord_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_players_club ON players(club_tag)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_players_expires ON players(expires_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_players_overflow ON players(is_overflow, slot_deadline)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_apps_status ON applications(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_history_player ON transfer_history(player_name)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tlist_club ON transfer_list(club_tag)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tlist_price ON transfer_list(price ASC, listed_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_fa_registered ON free_agents(registered_at DESC)")
 
             # Bezpieczna inicjalizacja domyślnych ustawień (bez usuwania jakichkolwiek danych użytkownika)
             cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('market_status', 'OPEN')")
@@ -243,12 +281,30 @@ def init_db():
         except Exception:
             pass
 
-def reset_all(full_reset_including_setup: bool = True):
+def create_pre_reset_snapshot() -> str | None:
+    """Tworzy kopię bezpieczeństwa przed resetem i zwraca jej nazwę."""
+    if _is_test_env():
+        return None
+    try:
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        target = f"liga_pre_reset_{ts}.db"
+        with get_connection() as conn:
+            conn.execute("VACUUM INTO ?", (target,))
+        print(f"[DB] Utworzono automatyczny snapshot bezpieczeństwa: {target}")
+        return target
+    except Exception as e:
+        print(f"[DB] Błąd tworzenia snapshotu pre-reset: {e}")
+        return None
+
+def reset_all(full_reset_including_setup: bool = True) -> str | None:
     """Usuwa wszystko z bazy danych. Jeśli full_reset_including_setup=True, czyści także ustawienia /setup."""
+    snapshot = create_pre_reset_snapshot()
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM players")
+            cursor.execute("DELETE FROM transfer_list")
             cursor.execute("DELETE FROM applications")
             cursor.execute("DELETE FROM transfer_history")
             cursor.execute("DELETE FROM free_agents")
@@ -271,13 +327,16 @@ def reset_all(full_reset_including_setup: bool = True):
                 pass
 
     sync_persistent_backup()
+    return snapshot
 
-def reset_clubs():
+def reset_clubs() -> str | None:
     """Usuwa kluby, kontrakty zawodników i wnioski, ale ZACHOWUJE ustawienia /setup i wolnych agentów."""
+    snapshot = create_pre_reset_snapshot()
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM players")
+            cursor.execute("DELETE FROM transfer_list")
             cursor.execute("DELETE FROM applications")
             cursor.execute("DELETE FROM transfer_history")
             cursor.execute("DELETE FROM clubs")
@@ -288,13 +347,16 @@ def reset_clubs():
                 pass
             conn.commit()
     sync_persistent_backup()
+    return snapshot
 
-def reset_contracts():
+def reset_contracts() -> str | None:
     """Usuwa wszystkich zawodników, kontrakty, wolnych agentów, wnioski i historię. ZACHOWUJE kluby i zarządy oraz /setup."""
+    snapshot = create_pre_reset_snapshot()
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM players")
+            cursor.execute("DELETE FROM transfer_list")
             cursor.execute("DELETE FROM free_agents")
             cursor.execute("DELETE FROM applications")
             cursor.execute("DELETE FROM transfer_history")
@@ -305,9 +367,11 @@ def reset_contracts():
                 pass
             conn.commit()
     sync_persistent_backup()
+    return snapshot
 
-def reset_applications():
+def reset_applications() -> str | None:
     """Czyści wyłącznie wnioski transferowe i resetuje licznik ticketów do #001."""
+    snapshot = create_pre_reset_snapshot()
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -319,26 +383,32 @@ def reset_applications():
                 pass
             conn.commit()
     sync_persistent_backup()
+    return snapshot
 
-def reset_market():
+def reset_market() -> str | None:
     """Resetuje rynek transferowy: otwiera rynek, kasuje harmonogram i czyści giełdę wolnych agentów."""
+    snapshot = create_pre_reset_snapshot()
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM free_agents")
+            cursor.execute("DELETE FROM transfer_list")
             cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('market_status', 'OPEN')")
             cursor.execute("DELETE FROM settings WHERE key IN ('market_close_at', 'market_open_at')")
             conn.commit()
     sync_persistent_backup()
+    return snapshot
 
-def reset_setup():
+def reset_setup() -> str | None:
     """Przywraca domyślne ustawienia panelu /setup (usuwa konfigurację cfg_*), zachowując wszystkie kluby i graczy."""
+    snapshot = create_pre_reset_snapshot()
     with _lock:
         with get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM settings WHERE key LIKE 'cfg_%'")
             conn.commit()
     sync_persistent_backup()
+    return snapshot
 
 def reset_database_for_new_season():
     if os.path.exists(LEGACY_JSON_DB):
@@ -363,10 +433,13 @@ def get_league_stats() -> dict:
         fa_count = cursor.fetchone()[0]
         cursor.execute("SELECT COUNT(*) FROM applications WHERE status = 'PENDING'")
         pending_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM transfer_list")
+        tlist_count = cursor.fetchone()[0]
         return {
             "clubs": club_count,
             "players": player_count,
             "free_agents": fa_count,
+            "transfer_list": tlist_count,
             "pending_applications": pending_count
         }
 
@@ -380,7 +453,7 @@ def get_db_file_stats() -> dict:
 
     with get_connection() as conn:
         cursor = conn.cursor()
-        for table in ["clubs", "players", "applications", "transfer_history", "free_agents", "counters"]:
+        for table in ["clubs", "players", "applications", "transfer_history", "free_agents", "transfer_list", "counters"]:
             try:
                 cursor.execute(f"SELECT COUNT(*) FROM {table}")
                 stats[table] = cursor.fetchone()[0]

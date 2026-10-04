@@ -557,3 +557,189 @@ class TestAsyncApplicationView(unittest.IsolatedAsyncioTestCase):
         self.assertIn(222, club["board_ids"])
         self.assertIn(333, club["board_ids"])
         self.assertNotIn(999, club["board_ids"])
+
+    async def test_cb_fed_accept_without_party_consents_succeeds(self):
+        """Federacja może zatwierdzić wniosek bez zgód zawodnika i klubu macierzystego."""
+        from unittest.mock import AsyncMock, MagicMock
+        import discord
+        from views.application_view import ForumApplicationView
+        from config import ROLE_FEDERACJA_ID
+
+        database.add_club("FCB", "FC Barcelona", 1, 2)
+        database.add_club("RMA", "Real Madrid", 3, 4)
+        database.add_or_update_player("Kylian", 777, "FCB", None, "Brak", "Professional", "2026-12-31")
+
+        app_id = database.create_application(
+            app_type="TRANSFER",
+            applicant_id=3,
+            player_name="Kylian",
+            player_discord_id=777,
+            target_club="RMA",
+            source_club="FCB",
+            expires_at="2027-12-31",
+            clause="100k",
+            amount="50k",
+            needs_player_agree=True,
+            needs_source_club_agree=True
+        )
+
+        app_before = database.get_application(app_id)
+        self.assertEqual(app_before["player_agreed"], 0)
+        self.assertEqual(app_before["source_club_agreed"], 0)
+
+        view = ForumApplicationView(app_id)
+        interaction = MagicMock()
+        fed_role = MagicMock()
+        fed_role.id = ROLE_FEDERACJA_ID
+        interaction.user.roles = [fed_role]
+        interaction.user.mention = "<@111>"
+        interaction.channel = MagicMock()
+        interaction.channel.id = 555
+        interaction.channel.edit = AsyncMock()
+        interaction.client.get_channel.return_value.send = AsyncMock()
+        interaction.client.fetch_user = AsyncMock()
+
+        msg = MagicMock()
+        msg.channel.id = 555
+        msg.id = 8888
+        embed = discord.Embed(title="🤝 WNIOSEK TRANSFEROWY: Kylian")
+        embed.add_field(name="Status", value="Oczekuje na zgody...")
+        msg.embeds = [embed]
+        msg.edit = AsyncMock()
+        interaction.message = msg
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+
+        member = MagicMock()
+        member.add_roles = AsyncMock()
+        member.remove_roles = AsyncMock()
+        interaction.guild.get_member.return_value = member
+        interaction.guild.get_role.return_value = MagicMock()
+
+        # Federacja zatwierdza wniosek mimo braku zgód
+        await view.cb_fed_accept(interaction)
+
+        app_after = database.get_application(app_id)
+        self.assertEqual(app_after["status"], "ACCEPTED")
+
+        # Zawodnik przeszedł do nowego klubu
+        p = database.get_player("Kylian")
+        self.assertEqual(p["club_tag"], "RMA")
+
+    async def test_fed_auto_accept(self):
+        """Wniosek utworzony przez federację jest natychmiast zatwierdzany przez fed_auto_accept."""
+        from unittest.mock import AsyncMock, MagicMock
+        import discord
+        from views.application_view import fed_auto_accept
+
+        database.add_club("FCB", "FC Barcelona", 1, 2)
+        app_id = database.create_application(
+            app_type="PODPISANIE",
+            applicant_id=999,
+            player_name="Neymar",
+            player_discord_id=1111,
+            target_club="FCB",
+            expires_at="2027-12-31",
+            clause="80k"
+        )
+
+        guild = MagicMock()
+        member = MagicMock()
+        member.add_roles = AsyncMock()
+        guild.get_member.return_value = member
+        guild.get_role.return_value = MagicMock()
+        guild.get_channel.return_value = None
+
+        client = MagicMock()
+        client.fetch_user = AsyncMock()
+        kom_ch = MagicMock()
+        kom_ch.send = AsyncMock()
+        client.get_channel.return_value = kom_ch
+        user = MagicMock()
+        user.mention = "<@999>"
+
+        thread_msg = MagicMock()
+        thread_msg.thread = MagicMock()
+        thread_msg.thread.id = 4444
+        thread_msg.thread.edit = AsyncMock()
+        thread_msg.thread.send = AsyncMock()
+        embed = discord.Embed(title="👤 PODPISANIE: Neymar")
+        embed.add_field(name="Status", value="Oczekuje...")
+        thread_msg.message = MagicMock()
+        thread_msg.message.embeds = [embed]
+        thread_msg.message.edit = AsyncMock()
+
+        ok = await fed_auto_accept(app_id, client, guild, thread_msg, user)
+        self.assertTrue(ok)
+
+        app = database.get_application(app_id)
+        self.assertEqual(app["status"], "ACCEPTED")
+        p = database.get_player("Neymar")
+        self.assertIsNotNone(p)
+        self.assertEqual(p["club_tag"], "FCB")
+        thread_msg.thread.edit.assert_awaited()
+        thread_msg.message.edit.assert_awaited()
+
+    async def test_transfer_delists_from_transfer_list(self):
+        """Transfer zawodnika usuwa go automatycznie z listy transferowej."""
+        from unittest.mock import AsyncMock, MagicMock
+        import discord
+        from views.application_view import ForumApplicationView
+        from config import ROLE_FEDERACJA_ID
+
+        database.add_club("FCB", "FC Barcelona", 1, 2)
+        database.add_club("RMA", "Real Madrid", 3, 4)
+        database.add_or_update_player("Rodrygo", 888, "FCB", None, "Brak", "Professional", "2026-12-31")
+        database.add_to_transfer_list("Rodrygo", "FCB", 60_000, discord_id=888, listed_by=1, note="Na sprzedaż")
+
+        self.assertIsNotNone(database.get_transfer_list_entry("Rodrygo"))
+
+        app_id = database.create_application(
+            app_type="TRANSFER",
+            applicant_id=3,
+            player_name="Rodrygo",
+            player_discord_id=888,
+            target_club="RMA",
+            source_club="FCB",
+            expires_at="2027-12-31",
+            clause="120k",
+            amount="60k"
+        )
+
+        view = ForumApplicationView(app_id)
+        interaction = MagicMock()
+        fed_role = MagicMock()
+        fed_role.id = ROLE_FEDERACJA_ID
+        interaction.user.roles = [fed_role]
+        interaction.user.mention = "<@111>"
+        interaction.channel = MagicMock()
+        interaction.channel.id = 555
+        interaction.channel.edit = AsyncMock()
+        interaction.client.get_channel.return_value.send = AsyncMock()
+        interaction.client.fetch_user = AsyncMock()
+
+        msg = MagicMock()
+        msg.channel.id = 555
+        msg.id = 8888
+        embed = discord.Embed(title="🤝 WNIOSEK TRANSFEROWY: Rodrygo")
+        embed.add_field(name="Status", value="Oczekuje...")
+        msg.embeds = [embed]
+        msg.edit = AsyncMock()
+        interaction.message = msg
+        interaction.response.defer = AsyncMock()
+        interaction.followup.send = AsyncMock()
+
+        member = MagicMock()
+        member.add_roles = AsyncMock()
+        member.remove_roles = AsyncMock()
+        interaction.guild.get_member.return_value = member
+        interaction.guild.get_role.return_value = MagicMock()
+
+        await view.cb_fed_accept(interaction)
+
+        # Weryfikacja: Rodrygo przeszedł do RMA i został usunięty z listy transferowej FCB
+        self.assertIsNone(database.get_transfer_list_entry("Rodrygo"))
+        p = database.get_player("Rodrygo")
+        self.assertEqual(p["club_tag"], "RMA")
+
+

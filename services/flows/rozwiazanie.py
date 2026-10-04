@@ -4,7 +4,10 @@ import discord
 from discord import ui
 import database
 import utils.league_config as league_config
-from utils.helpers import *
+from utils.helpers import (
+    clean_player_name, clean_tag, is_club_board_or_owner,
+    is_federation, resolve_player_identity, send_dm
+)
 from views.confirmation import WniosekConfirmView
 from views.application_view import ForumApplicationView
 from .shared import _create_ticket_channel, _safe_delete_channel, _zadaj_pytanie, _send_forum_application, _check_spam
@@ -42,18 +45,9 @@ async def proces_rozwiazania(interaction: discord.Interaction):
                 continue
             break
 
-        # Usunięto tryb dyscyplinarny - wymuszamy tryb polubowny
+        # Tryb polubowny
         tryb = "1"
         is_disciplinary = False
-
-        while True:
-            kup = clean_tag(await _zadaj_pytanie(kanal, user, "Podaj skrót TWOJEGO KLUBU:", client))
-            if not database.get_club(kup):
-                await kanal.send(embed=discord.Embed(description="❌ Klub nie istnieje!", color=0xe74c3c))
-            elif not is_club_board_or_owner(user, kup):
-                await kanal.send(embed=discord.Embed(description="❌ Nie jesteś w zarządzie tego klubu!", color=0xe74c3c))
-            else:
-                break
 
         while True:
             gracz_input = await _zadaj_pytanie(kanal, user, f"Oznacz @Zawodnika do rozwiązania (z klubu `{user_club}`):", client)
@@ -104,7 +98,7 @@ async def proces_rozwiazania(interaction: discord.Interaction):
             needs_player_agree=needs_player
         )
         thread = await _send_forum_application(guild, kanal, embed,
-                                                f"[ROZWIĄZANIE] {user_club} – {real_name}", app_id)
+                                                f"[ROZWIĄZANIE] {user_club} – {real_name}", app_id, client=client)
         if player_dc_id:
             msg = f"📩 Klub `{user_club}` złożył wniosek o rozwiązanie kontraktu za porozumieniem stron.\n🔗 {thread.jump_url}"
             await send_dm(client, player_dc_id, msg)

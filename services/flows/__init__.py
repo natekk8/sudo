@@ -1,4 +1,4 @@
-from .rejestracja import proces_rejestracji_klubu
+﻿from .rejestracja import proces_rejestracji_klubu
 from .podpisanie import proces_podpisania
 from .transfer import proces_transferu
 from .wypozyczenie import proces_wypozyczenia
@@ -6,4 +6,3 @@ from .aneks import proces_aneksu
 from .rozwiazanie import proces_rozwiazania
 from .zarzadzanie import proces_zarzadzania_klubem
 from .wniosek_ogolny import proces_wniosku_ogolnego
-from .dodanie_do_rezerwy import proces_dodania_do_rezerwy

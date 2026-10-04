@@ -1,9 +1,8 @@
 import discord
 from discord import ui
 import database
-from config import MAX_PLAYERS_PER_CLUB
 import utils.league_config as league_config
-from utils.helpers import build_squad_bar, format_expiry_discord, clean_player_name
+from utils.helpers import build_squad_bar, format_expiry_discord, clean_player_name, format_price
 
 
 _MAX_DISPLAY_AGENTS = 25
@@ -22,12 +21,13 @@ class KlubSelectPage(ui.Select):
         has_next = end < len(clubs)
 
         options = []
+        counts = database.get_club_player_counts()
         for c in page_clubs:
-            count = database.get_club_player_count(c["tag"])
+            count = counts.get(c["tag"].upper(), 0)
             options.append(discord.SelectOption(
                 label=f"{c['name']} ({c['tag']})"[:100],
                 value=c["tag"],
-                description=f"Skład: {count}/{MAX_PLAYERS_PER_CLUB}",
+                description=f"Skład: {count}/{league_config.max_players()}",
                 emoji="⚽"
             ))
         if has_next:
@@ -67,6 +67,8 @@ class KlubSelectPage(ui.Select):
         embed.add_field(name="Skład kadry", value=build_squad_bar(count, league_config.max_players()), inline=False)
 
         if players:
+            listed = {e["player_name"].lower(): e for e in database.get_transfer_list()
+                      if e["club_tag"].upper() == val.upper()}
             lines = []
             for p in players:
                 clean_n = clean_player_name(p.get("name", ""), p.get("discord_id"))
@@ -74,8 +76,24 @@ class KlubSelectPage(ui.Select):
                 typ = "⏱️ Wyp." if p.get("contract_type") == "WYPOZYCZENIE" else "📄"
                 expires = format_expiry_discord(p.get("expires_at"))
                 klauz = p.get("clause", "Brak")
-                lines.append(f"{typ} {name_d} · do {expires} · Klauzula: `{klauz}`")
-            embed.add_field(name="Zawodnicy", value="\n".join(lines), inline=False)
+                line = f"{typ} {name_d} · do {expires} · Klauzula: `{klauz}`"
+                entry = listed.get((p.get("name") or "").lower())
+                if entry:
+                    line += f" · 📋 **Na sprzedaż: `{format_price(entry['price'])}`**"
+                lines.append(line)
+
+            # Pole embeda: max 1024 znaków – dzielimy na kilka pól przy dużych kadrach
+            chunk, size, part = [], 0, 1
+            for ln in lines:
+                if size + len(ln) + 1 > 1000 and chunk:
+                    embed.add_field(name="Zawodnicy" if part == 1 else "Zawodnicy (cd.)",
+                                    value="\n".join(chunk), inline=False)
+                    chunk, size, part = [], 0, part + 1
+                chunk.append(ln)
+                size += len(ln) + 1
+            if chunk:
+                embed.add_field(name="Zawodnicy" if part == 1 else "Zawodnicy (cd.)",
+                                value="\n".join(chunk), inline=False)
         else:
             embed.add_field(name="Zawodnicy", value="*Brak zarejestrowanych zawodników.*", inline=False)
 
@@ -93,78 +111,22 @@ class KlubSelectPage(ui.Select):
 
 
 class WidokRynkuTransferowego(ui.View):
-    """Panel Rynek Transferowy & Baza Graczy (Wiadomość 2)."""
+    """Panel Rynek Transferowy: Lista Transferowa & Składy Drużyn (Wiadomość 2)."""
 
     def __init__(self):
         super().__init__(timeout=None)
 
-    @ui.button(label="Dołącz do Rezerwy", style=discord.ButtonStyle.success,
-               emoji="🙋", custom_id="rynek_szukam_klubu")
-    async def b_szukam_klubu(self, interaction: discord.Interaction, button: ui.Button):
-        user = interaction.user
-
-        # Jeżeli klika zarząd lub admin, otwórz ticket
-        from utils.helpers import is_federation
-        is_admin = (getattr(user, 'guild_permissions', None) and user.guild_permissions.administrator) or is_federation(user)
-        
-        # Sprawdzamy czy użytkownik jest w zarządzie JAKIEGOKOLWIEK klubu
-        clubs = database.get_all_clubs()
-        user_is_board = False
-        for c in clubs:
-            from utils.helpers import is_club_board_or_owner
-            if is_club_board_or_owner(user, c["tag"]):
-                user_is_board = True
-                break
-
-        if is_admin or user_is_board:
-            from services.flows import proces_dodania_do_rezerwy
-            return await proces_dodania_do_rezerwy(interaction, interaction.client)
-
-        existing = database.get_player_by_discord_id(user.id)
-        if existing and existing.get("club_tag"):
-            return await interaction.response.send_message(
-                f"❌ Jesteś już zarejestrowany w klubie **`{existing['club_tag']}`**!\n"
-                "Aby szukać nowego klubu, zakończ obecny kontrakt lub zostań transferowanym.",
-                ephemeral=True
-            )
-
-        if database.is_free_agent(user.id):
-            database.remove_free_agent(user.id)
-            await interaction.response.send_message(
-                "✅ Usunięto Cię z Bazy Rezerwowej. Nie szukasz już klubu.",
-                ephemeral=True
-            )
-        else:
-            database.register_free_agent(user.id, user.display_name)
-            await interaction.response.send_message(
-                "✅ Zarejestrowano Cię do **Bazy Rezerwowej**! Jesteś widoczny na liście.\n"
-                "Ponowne kliknięcie tego przycisku usunie Cię z bazy.",
-                ephemeral=True
-            )
+    @ui.button(label="Zaktualizuj Listę Transferową", style=discord.ButtonStyle.success,
+               emoji="📝", custom_id="rynek_lista_update")
+    async def b_lista_update(self, interaction: discord.Interaction, button: ui.Button):
+        from views.transfer_list import proces_listy_transferowej
+        await proces_listy_transferowej(interaction)
 
     @ui.button(label="Szukam Zawodnika", style=discord.ButtonStyle.primary,
                emoji="🔍", custom_id="rynek_szukam_zawodnika")
     async def b_szukam_zawodnika(self, interaction: discord.Interaction, button: ui.Button):
-        agents, total = database.get_free_agents_paginated(_MAX_DISPLAY_AGENTS)
-
-        if not agents:
-            return await interaction.response.send_message(
-                "📋 **Giełda Wolnych Agentów jest obecnie pusta.**\n"
-                "> Żaden gracz nie zgłosił się jako wolny agent.",
-                ephemeral=True
-            )
-
-        lines = [f"• <@{a['discord_id']}> ({a.get('player_name', '?')})" for a in agents]
-        showed = len(agents)
-        footer_txt = f"Wyświetlono {showed} z {total} wolnych agentów"
-
-        embed = discord.Embed(
-            title=f"📋 Giełda Wolnych Agentów ({total} graczy)",
-            description="\n".join(lines),
-            color=0x3498db
-        )
-        embed.set_footer(text=footer_txt)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        from views.transfer_list import build_transfer_list_embed
+        await interaction.response.send_message(embed=build_transfer_list_embed(), ephemeral=True)
 
     @ui.button(label="Składy Drużyn", style=discord.ButtonStyle.secondary,
                emoji="📋", custom_id="rynek_sklady_druzyn")
@@ -180,3 +142,4 @@ class WidokRynkuTransferowego(ui.View):
             view=view,
             ephemeral=True
         )
+

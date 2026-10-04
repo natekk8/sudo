@@ -4,7 +4,10 @@ import discord
 from discord import ui
 import database
 import utils.league_config as league_config
-from utils.helpers import *
+from utils.helpers import (
+    clean_tag, get_komunikaty_channel, is_club_board_or_owner,
+    is_federation, is_valid_tag
+)
 from views.confirmation import WniosekConfirmView
 from views.application_view import ForumApplicationView
 from .shared import _create_ticket_channel, _safe_delete_channel, _zadaj_pytanie, _send_forum_application, _check_spam
@@ -215,7 +218,7 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
                     reason=powod_del
                 )
                 await _send_forum_application(guild, kanal, embed_del_app,
-                                               f"[USUNIĘCIE] {user_club} – {stara_nazwa}", app_id)
+                                               f"[USUNIĘCIE] {user_club} – {stara_nazwa}", app_id, client=client)
                 return
 
         # ── OPCJA 1: EDYCJA DANYCH KLUBU ──
@@ -280,7 +283,7 @@ async def proces_zarzadzania_klubem(interaction: discord.Interaction):
         )
         tag_display = f"{user_club} ➔ {nowy_tag}" if nowy_tag != user_club else user_club
         await _send_forum_application(guild, kanal, embed,
-                                       f"[ZARZĄDZANIE] {tag_display} – {nowa_nazwa}", app_id)
+                                       f"[ZARZĄDZANIE] {tag_display} – {nowa_nazwa}", app_id, client=client)
 
     except TimeoutError:
         pass

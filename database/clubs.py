@@ -74,6 +74,7 @@ def update_club_full(old_tag: str, new_tag: str = None, new_name: str = None,
                 cursor.execute("UPDATE players SET parent_club_tag = ? WHERE parent_club_tag = ?", (new_tag, old_tag))
                 cursor.execute("UPDATE transfer_history SET from_club = ? WHERE from_club = ?", (new_tag, old_tag))
                 cursor.execute("UPDATE transfer_history SET to_club = ? WHERE to_club = ?", (new_tag, old_tag))
+                cursor.execute("UPDATE transfer_list SET club_tag = ? WHERE club_tag = ?", (new_tag, old_tag))
 
             conn.commit()
             return True
@@ -94,6 +95,7 @@ def delete_club(tag: str, terminate_players: bool = True) -> bool:
                 return False
             if terminate_players:
                 cursor.execute("DELETE FROM players WHERE club_tag = ?", (tag,))
+            cursor.execute("DELETE FROM transfer_list WHERE club_tag = ?", (tag,))
             cursor.execute("DELETE FROM clubs WHERE tag = ?", (tag,))
             conn.commit()
             return True

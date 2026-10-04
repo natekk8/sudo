@@ -20,6 +20,9 @@ intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+from utils.helpers import set_bot
+set_bot(bot)
+
 expirations_task = setup_expirations_task(bot, guild_id=GUILD_ID or None)
 
 
@@ -43,15 +46,16 @@ async def setup_panel(interaction: discord.Interaction):
 
     # ── Panel 1: Transfery i Kontrakty ───────────────────────────────────────
     embed1 = discord.Embed(
-        title="📋 Transfery i Kontrakty — FSS",
+        title="📋 Biuro Składów i Kontraktów — FSS",
         description=(
-            "Oficjalne procesy transferowo-kontraktowe Federacji Siatkówki Stołowej.\n"
-            "Po kliknięciu przycisku bot otworzy **prywatny kanał ticketu**, gdzie odpiszesz na pytania.\n\n"
-            f"**👤 Podpisanie Gracza** · Rejestracja wolnego agenta (limit: **{mx}** + opcjonalny 4. zawodnik na 5 dni)\n"
-            "**🤝 Wniosek Transferowy / Wymiana** · Kupno zawodnika lub wymiana z dopłatą. Możliwe wzięcie 4. zawodnika (5 dni na zwolnienie miejsca)\n"
-            "**⏱️ Wypożyczenie** · Czasowe przejście zawodnika do innego klubu z opcją 4. zawodnika\n\n"
-            "**📄 Aneks do Umowy** · Przedłużenie wygasającego kontraktu lub zmiana klauzuli wykupu\n"
-            "**❌ Rozwiązanie Umowy** · W trakcie trwania kontraktu możliwe **wyłącznie za obopólną zgodą** (porozumienie stron)"
+            "Oficjalne procedury transferowo-kontraktowe Federacji Siatkówki Stołowej.\n"
+            "Kliknięcie przycisku otwiera **dedykowany prywatny ticket**, w którym bot przeprowadzi Cię przez wniosek.\n\n"
+            f"**👤 Podpisanie Gracza** · Rejestracja wolnego agenta do klubu (limit: **{mx}** zawodników + opcjonalny 4. zawodnik na 5 dni).\n"
+            "**🤝 Wniosek Transferowy / Wymiana** · Kupno zawodnika z innego klubu lub bezpośrednia wymiana z dopłatą.\n"
+            "**⏱️ Wypożyczenie** · Czasowe przejście zawodnika do innego klubu z zachowaniem praw macierzystych.\n\n"
+            "**📄 Aneks do Umowy** · Przedłużenie wygasającego kontraktu lub modyfikacja klauzuli wykupu.\n"
+            "**❌ Rozwiązanie Umowy** · Polubowne zakończenie kontraktu za porozumieniem stron.\n\n"
+            "> ℹ️ *Zarząd Federacji może składać i natychmiast zatwierdzać wnioski w imieniu każdego klubu.*"
         ),
         color=0x2b2d31
     )
@@ -60,20 +64,20 @@ async def setup_panel(interaction: discord.Interaction):
 
     # ── Panel 2: Rynek Transferowy ───────────────────────────────────────────
     embed2 = discord.Embed(
-        title="📊 Baza Rezerwowa i Składy — FSS",
+        title="📊 Rynek Transferowy & Kadry Klubowe — FSS",
         description=(
-            "Baza Rezerwowa wolnych agentów i oficjalne składy.\n\n"
-            "**🙋 Dołącz do Rezerwy**\n"
-            "» Zawodnik bez klubu: rejestracja do bazy rezerw (ponowne kliknięcie wypisuje).\n"
-            "» Zarząd: szybkie ręczne wpisanie/wyrzucenie zawodnika do wolnych agentów.\n\n"
+            "Centralny rynek zawodników, oficjalna lista transferowa i składy drużyn.\n\n"
+            "**📝 Zaktualizuj Listę Transferową**\n"
+            "» **Zarząd klubu:** wystaw swojego zawodnika na sprzedaż z określoną ceną lub zdejmij go z listy.\n"
+            "» **Zarząd Federacji:** pełne uprawnienia do zarządzania listą transferową dowolnego klubu.\n\n"
             "**🔍 Szukam Zawodnika**\n"
-            "Przeglądaj listę wszystkich zawodników czekających w Bazie Rezerwowej.\n\n"
+            "Przeglądaj oficjalną **Listę Transferową** (posortowaną cenowo) z pełnymi danymi zawodników oraz bazę wolnych agentów.\n\n"
             "**📋 Składy Drużyn**\n"
-            "Sprawdź aktualne kadry klubów, wykorzystane limity oraz ważne daty kontraktów."
+            "Sprawdź oficjalne kadry wszystkich klubów, statusy zawodników (w tym wystawionych na sprzedaż) i terminy umów."
         ),
         color=0x1e1f22
     )
-    embed2.set_footer(text=f"{org_name} • Giełda Graczy")
+    embed2.set_footer(text=f"{org_name} • Giełda i Składy")
     await interaction.channel.send(embed=embed2, view=WidokRynkuTransferowego())
 
     # ── Panel 3: Administracja Klubów ────────────────────────────────────────
@@ -81,9 +85,9 @@ async def setup_panel(interaction: discord.Interaction):
         title="🏛️ Biuro Federacji Siatkówki Stołowej",
         description=(
             "Oficjalne sprawy administracyjne FSS — rejestracja, zarządzanie klubem oraz ogólny kontakt z Zarządem.\n\n"
-            "**📝 Rejestracja Klubu** · Złóż wniosek o utworzenie i dołączenie nowej drużyny\n"
-            "**⚙️ Zarządzanie Klubem** · Zmień nazwę, TAG, właściciela, zarząd lub zlikwiduj klub\n\n"
-            "**📨 Złóż Wniosek Ogólny** · Wszelkie inne sprawy do Federacji (np. przełożenie meczu, odwołania, zapytania)"
+            "**📝 Rejestracja Klubu** · Wniosek o utworzenie i dołączenie nowej drużyny do federacji.\n"
+            "**⚙️ Zarządzanie Klubem** · Zmiana nazwy, TAGu, właściciela, składu zarządu lub rozwiązanie klubu.\n\n"
+            "**📨 Złóż Wniosek Ogólny** · Wszelkie inne sprawy do Federacji (odwołania, przekładanie meczów, zapytania)."
         ),
         color=0x3d5a80
     )
@@ -104,22 +108,19 @@ async def on_ready():
         print(f"[on_ready] Błąd resetu PROCESSING: {e}")
 
     # Czyszczenie sierocych kanałów ticketów (rozwiązanie problemu trwałej blokady po restarcie)
-    if GUILD_ID:
-        try:
-            guild = bot.get_guild(int(GUILD_ID))
-            if guild:
-                prefixes = ("rejestracja-", "kontrakt-", "transfer-", "wypozyczenie-",
-                            "aneks-", "rozwiazanie-", "rebrand-", "zarzadzanie-",
-                            "wniosek-", "rezerwa-")
-                for channel in guild.text_channels:
-                    if any(channel.name.startswith(p) for p in prefixes):
-                        try:
-                            await channel.delete(reason="Czyszczenie sierocych ticketów po restarcie bota.")
-                            print(f"[on_ready] Usunięto osierocony ticket: {channel.name}")
-                        except Exception as e:
-                            print(f"[on_ready] Nie udało się usunąć ticketu {channel.name}: {e}")
-        except Exception as e:
-            print(f"[on_ready] Błąd podczas czyszczenia ticketów: {e}")
+    try:
+        guild = bot.get_guild(int(GUILD_ID)) if GUILD_ID else (bot.guilds[0] if bot.guilds else None)
+        if guild:
+            from utils.helpers import TICKET_PREFIXES
+            for channel in guild.text_channels:
+                if any(channel.name.startswith(p) for p in TICKET_PREFIXES):
+                    try:
+                        await channel.delete(reason="Czyszczenie sierocych ticketów po restarcie bota.")
+                        print(f"[on_ready] Usunięto osierocony ticket: {channel.name}")
+                    except Exception as e:
+                        print(f"[on_ready] Nie udało się usunąć ticketu {channel.name}: {e}")
+    except Exception as e:
+        print(f"[on_ready] Błąd podczas czyszczenia ticketów: {e}")
 
     for app in database.get_pending_applications():
         msg_id = app.get("message_id")
@@ -193,6 +194,7 @@ async def on_interaction(interaction: discord.Interaction):
                         "fed_accept": view.cb_fed_accept,
                         "fed_reject": view.cb_fed_reject,
                         "p_agree": view.cb_player_agree,
+                        "pb_agree": view.cb_player_b_agree,
                         "t_agree": view.cb_target_agree,
                         "s_agree": view.cb_source_agree,
                         "party_reject": view.cb_party_reject,
@@ -209,6 +211,15 @@ async def on_interaction(interaction: discord.Interaction):
                                 raise
             except Exception as e:
                 print(f"[on_interaction] Błąd dynamicznego dispatchu dla {cid}: {e}")
+
+        elif cid == "rynek_szukam_klubu":
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "ℹ️ **System został zaktualizowany!**\n"
+                    "> Przycisk *Dołącz do rezerwy* został wycofany i zastąpiony nowym systemem **Listy Transferowej**.\n"
+                    "> Użyj przycisku **Zaktualizuj Listę Transferową** lub poproś administratora o ponowne wysłanie paneli komendą `/setup_panel`.",
+                    ephemeral=True
+                )
 
 
 if __name__ == "__main__":

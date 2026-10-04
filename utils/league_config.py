@@ -22,6 +22,7 @@ _DEFAULTS = {
     "cfg_max_players":        os.getenv("MAX_PLAYERS_PER_CLUB", "3"),
     "cfg_channel_forum":      os.getenv("CHANNEL_FORUM_ID", "0"),
     "cfg_channel_komunikaty": os.getenv("CHANNEL_KOMUNIKATY_ID", "0"),
+    "cfg_channel_audit":      os.getenv("CHANNEL_AUDIT_ID", "0"),
     "cfg_role_federacja":     os.getenv("ROLE_FEDERACJA_ID", "0"),
     "cfg_rola_wzorzec":       os.getenv("ROLA_WZORZEC_ID", "0"),
     "cfg_season_label":       "2026/27",
@@ -32,6 +33,7 @@ _LABELS = {
     "cfg_max_players":        "Max graczy w klubie",
     "cfg_channel_forum":      "Kanał forum (ID)",
     "cfg_channel_komunikaty": "Kanał komunikatów (ID)",
+    "cfg_channel_audit":      "Kanał audytu (ID)",
     "cfg_role_federacja":     "Rola Federacji (ID)",
     "cfg_rola_wzorzec":       "Wzorzec roli gracza (ID)",
     "cfg_season_label":       "Oznaczenie sezonu",
@@ -71,6 +73,9 @@ def channel_forum_id() -> int:
 
 def channel_komunikaty_id() -> int:
     return get_int("cfg_channel_komunikaty")
+
+def channel_audit_id() -> int:
+    return get_int("cfg_channel_audit")
 
 def role_federacja_id() -> int:
     return get_int("cfg_role_federacja")

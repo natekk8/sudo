@@ -1,3 +1,4 @@
+import inspect
 import re
 import discord
 from discord import ui
@@ -5,7 +6,7 @@ import database
 from config import ROLE_FEDERACJA_ID, ROLA_WZORZEC_ID, CHANNEL_KOMUNIKATY_ID, MAX_PLAYERS_PER_CLUB
 import utils.league_config as league_config
 from utils.helpers import (
-    is_federation, is_club_board_or_owner, extract_ids, clean_tag,
+    is_federation, is_admin_or_federation, is_club_board_or_owner, extract_ids, clean_tag,
     send_dm, format_expiry_discord, get_or_fetch_member,
     clean_player_name, get_komunikaty_channel
 )
@@ -171,6 +172,32 @@ def _reconstruct_app_from_message(message: discord.Message, app_id: int, guild: 
     return app_data
 
 
+class _FedAutoFollowup:
+    """Udaje interaction.followup – komunikaty trafiają do wątku wniosku."""
+
+    def __init__(self, thread):
+        self._thread = thread
+
+    async def send(self, content=None, **kwargs):
+        try:
+            if content:
+                await self._thread.send(content, allowed_mentions=discord.AllowedMentions.none())
+        except Exception as e:
+            print(f"[ForumView] Błąd komunikatu auto-akceptacji: {e}")
+
+
+class _FedAutoInteraction:
+    """Minimalny zamiennik discord.Interaction dla `_execute_accept` przy auto-zatwierdzeniu."""
+
+    def __init__(self, client, guild, user, thread, message):
+        self.client = client
+        self.guild = guild
+        self.user = user
+        self.channel = thread
+        self.message = message
+        self.followup = _FedAutoFollowup(thread)
+
+
 class ForumApplicationView(ui.View):
     def __init__(self, app_id: int):
         super().__init__(timeout=None)
@@ -186,16 +213,34 @@ class ForumApplicationView(ui.View):
         app_type = app.get("type")
         is_transfer_type = app_type in ("TRANSFER", "WYPOZYCZENIE", "PODPISANIE", "ANEKS", "ROZWIAZANIE_POLUBOWNE", "WYMIANA")
 
-        # ── Zgoda gracza ──
+        # ── Zgoda gracza A ──
         if app.get("needs_player_agree") and app.get("player_discord_id") and is_transfer_type:
+            label_a = "Zgoda gracza A" if app_type == "WYMIANA" else "Zgoda gracza"
             if app.get("player_agreed"):
-                btn = ui.Button(label="Zgoda gracza ✅", style=discord.ButtonStyle.green,
+                btn = ui.Button(label=f"{label_a} ✅", style=discord.ButtonStyle.green,
                                 disabled=True, custom_id=f"app:{self.app_id}:p_agree")
             else:
-                btn = ui.Button(label="✍️ Zgoda gracza", style=discord.ButtonStyle.primary,
+                btn = ui.Button(label=f"✍️ {label_a}", style=discord.ButtonStyle.primary,
                                 custom_id=f"app:{self.app_id}:p_agree")
                 btn.callback = self.cb_player_agree
             self.add_item(btn)
+
+        # ── Zgoda gracza B (dla WYMIANA) ──
+        if app_type == "WYMIANA":
+            enc_b = app.get("new_founder_txt", "")
+            if enc_b and enc_b.startswith("WYMIANA|"):
+                parts = enc_b.split("|")
+                dc_b_str = parts[2] if len(parts) > 2 else ""
+                if dc_b_str.isdigit():
+                    b_agreed = (app.get("new_board_txt") == "AGREED")
+                    if b_agreed:
+                        btn_b = ui.Button(label="Zgoda gracza B ✅", style=discord.ButtonStyle.green,
+                                          disabled=True, custom_id=f"app:{self.app_id}:pb_agree")
+                    else:
+                        btn_b = ui.Button(label="✍️ Zgoda gracza B", style=discord.ButtonStyle.primary,
+                                          custom_id=f"app:{self.app_id}:pb_agree")
+                        btn_b.callback = self.cb_player_b_agree
+                    self.add_item(btn_b)
 
         # ── Zgoda kupującego / przyjmującego ──
         if app.get("needs_target_club_agree"):
@@ -271,6 +316,27 @@ class ForumApplicationView(ui.View):
         embed = self._update_status_field(interaction.message.embeds[0], database.get_application(self.app_id))
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("✅ Złożono podpis zawodnika.", ephemeral=True)
+
+    async def cb_player_b_agree(self, interaction: discord.Interaction):
+        app = database.get_application(self.app_id)
+        if not app or app.get("status") not in ("PENDING", "PROCESSING"):
+            return await interaction.response.send_message("❌ Ten wniosek jest już zamknięty.", ephemeral=True)
+        enc_b = app.get("new_founder_txt", "")
+        dc_b = None
+        if enc_b and enc_b.startswith("WYMIANA|"):
+            parts = enc_b.split("|")
+            dc_b_str = parts[2] if len(parts) > 2 else ""
+            if dc_b_str.isdigit():
+                dc_b = int(dc_b_str)
+        if interaction.user.id != dc_b:
+            return await interaction.response.send_message("❌ Tylko Zawodnik B może kliknąć ten przycisk!", ephemeral=True)
+        with database.get_connection() as conn:
+            conn.execute("UPDATE applications SET new_board_txt = 'AGREED' WHERE id = ?", (self.app_id,))
+            conn.commit()
+        self._build_buttons()
+        embed = self._update_status_field(interaction.message.embeds[0], database.get_application(self.app_id))
+        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.followup.send("✅ Złożono podpis Zawodnika B.", ephemeral=True)
 
     async def cb_target_agree(self, interaction: discord.Interaction):
         app = database.get_application(self.app_id)
@@ -385,17 +451,18 @@ class ForumApplicationView(ui.View):
     # ───────────────────────────── FEDERACJA ──────────────────────────────────
 
     async def cb_fed_accept(self, interaction: discord.Interaction):
-        if not is_federation(interaction.user):
+        if not is_admin_or_federation(interaction.user):
             return await interaction.response.send_message(
-                "❌ Tylko Zarząd Federacji może zatwierdzić wniosek.", ephemeral=True)
+                "❌ Tylko Zarząd Federacji / Administrator może zatwierdzić wniosek.", ephemeral=True)
 
         # ── Atomowy CAS: PENDING → PROCESSING ──
         app = database.try_claim_application_for_approval(self.app_id)
         if not app:
             existing = database.get_application(self.app_id)
-            if existing and existing.get("status") == "ACCEPTED":
+            if existing and existing.get("status") in ("ACCEPTED", "REJECTED"):
+                st_pl = "zatwierdzony" if existing.get("status") == "ACCEPTED" else "odrzucony"
                 return await interaction.response.send_message(
-                    "✅ Ten wniosek został już wcześniej pomyślnie zatwierdzony.", ephemeral=True)
+                    f"ℹ️ Ten wniosek został już wcześniej {st_pl}.", ephemeral=True)
             elif existing and existing.get("status") == "PROCESSING":
                 return await interaction.response.send_message(
                     "⏳ Ten wniosek jest obecnie przetwarzany przez innego członka zarządu.", ephemeral=True)
@@ -406,16 +473,16 @@ class ForumApplicationView(ui.View):
                 return await interaction.response.send_message(
                     "❌ Ten wniosek jest już przetwarzany lub został zamknięty.", ephemeral=True)
 
-        # ── Walidacja Zgód ──
-        if app.get("needs_player_agree") and not app.get("player_agreed"):
-            database.revert_application_status(self.app_id, "PENDING")
-            return await interaction.response.send_message("❌ Zawodnik jeszcze nie wyraził zgody!", ephemeral=True)
-        if app.get("needs_target_club_agree") and not app.get("target_club_agreed"):
-            database.revert_application_status(self.app_id, "PENDING")
-            return await interaction.response.send_message("❌ Klub kupujący/przyjmujący jeszcze nie wyraził zgody!", ephemeral=True)
-        if app.get("needs_source_club_agree") and not app.get("source_club_agreed"):
-            database.revert_application_status(self.app_id, "PENDING")
-            return await interaction.response.send_message("❌ Klub sprzedający/oddający jeszcze nie wyraził zgody!", ephemeral=True)
+        # ── Federacja zatwierdza z pominięciem zgód stron ──
+        # Zarząd Federacji może skontaktować się ze stronami poza botem, więc brak zgody
+        # zawodnika / klubów NIE blokuje decyzji. Zgody są traktowane jako udzielone.
+        for agree_type, needed, given in (
+            ("player", "needs_player_agree", "player_agreed"),
+            ("target_club", "needs_target_club_agree", "target_club_agreed"),
+            ("source_club", "needs_source_club_agree", "source_club_agreed"),
+        ):
+            if app.get(needed) and not app.get(given):
+                database.set_application_agreement(self.app_id, agree_type, True)
 
         await interaction.response.defer()
 
@@ -430,6 +497,22 @@ class ForumApplicationView(ui.View):
                     await interaction.followup.send("✅ Wniosek został pomyślnie zatwierdzony.", ephemeral=True)
                 except Exception as e:
                     print(f"[ForumView] Błąd followup akceptacji: {e}")
+                try:
+                    from utils.helpers import send_audit_log
+                    await send_audit_log(
+                        client=interaction.client,
+                        guild=guild,
+                        title=f"Wniosek #{self.app_id} ZATWIERDZONY",
+                        description=f"Wniosek **{app_type}** został oficjalnie zatwierdzony przez {interaction.user.mention}.",
+                        color=0x2ecc71,
+                        fields=[
+                            ("Typ wniosku", app_type, True),
+                            ("Zatwierdzający", f"{interaction.user} (`{interaction.user.id}`)", True),
+                            ("Klub / Zawodnik", f"{app.get('club_tag') or app.get('target_club') or '-'} / {app.get('player_name') or '-'}", True),
+                        ]
+                    )
+                except Exception as e:
+                    print(f"[Audit] Błąd logowania akceptacji wniosku: {e}")
         except Exception as e:
             # Rollback statusu PROCESSING → PENDING przy błędzie krytycznym
             database.revert_application_status(self.app_id)
@@ -1042,10 +1125,48 @@ class ForumApplicationView(ui.View):
 
         return True
 
+    async def fed_auto_accept(self, client, guild, thread_msg, user) -> bool:
+        """Natychmiastowe zatwierdzenie wniosku złożonego przez Zarząd Federacji.
+
+        `thread_msg` to wynik forum.create_thread (ThreadWithMessage). Zwraca True po sukcesie.
+        Przy błędzie wniosek wraca do PENDING i zostaje na forum do ręcznej decyzji.
+        """
+        app = database.try_claim_application_for_approval(self.app_id)
+        if not app:
+            return False
+        for agree_type, needed in (("player", "needs_player_agree"),
+                                   ("target_club", "needs_target_club_agree"),
+                                   ("source_club", "needs_source_club_agree")):
+            if app.get(needed):
+                database.set_application_agreement(self.app_id, agree_type, True)
+
+        shim = _FedAutoInteraction(client, guild, user, thread_msg.thread, thread_msg.message)
+        try:
+            kom_channel = await get_komunikaty_channel(client, guild)
+            ok = await self._execute_accept(shim, app, app.get("type"), guild, kom_channel)
+            if not ok:
+                database.revert_application_status(self.app_id)
+                return False
+            try:
+                await self._archive_thread(thread_msg.thread)
+            except Exception as e:
+                print(f"[ForumView] Błąd archiwizacji wątku: {e}")
+            return True
+        except Exception as e:
+            database.revert_application_status(self.app_id)
+            print(f"[ForumView] BŁĄD auto-akceptacji (app #{self.app_id}): {e}")
+            try:
+                await thread_msg.thread.send(
+                    f"❌ Automatyczne zatwierdzenie nie powiodło się: `{e}`\n"
+                    "> Wniosek pozostaje otwarty — użyj przycisku **✅ Akceptuj**.")
+            except Exception:
+                pass
+            return False
+
     async def cb_fed_reject(self, interaction: discord.Interaction):
-        if not is_federation(interaction.user):
+        if not is_admin_or_federation(interaction.user):
             return await interaction.response.send_message(
-                "❌ Tylko Zarząd Federacji może odrzucić wniosek.", ephemeral=True)
+                "❌ Tylko Zarząd Federacji / Administrator może odrzucić wniosek.", ephemeral=True)
 
         await interaction.response.defer()
 
@@ -1053,8 +1174,11 @@ class ForumApplicationView(ui.View):
         if not app:
             existing = database.get_application(self.app_id)
             if existing and existing.get("status") == "PROCESSING":
-                database.revert_application_status(self.app_id, "PENDING")
-                app = database.try_claim_application_for_approval(self.app_id)
+                return await interaction.followup.send(
+                    "⏳ Ten wniosek jest obecnie przetwarzany przez innego członka zarządu.", ephemeral=True)
+            elif existing and existing.get("status") in ("ACCEPTED", "REJECTED"):
+                st_pl = "zaakceptowany" if existing.get("status") == "ACCEPTED" else "odrzucony"
+                return await interaction.followup.send(f"ℹ️ Ten wniosek został już wcześniej {st_pl}.", ephemeral=True)
 
         if not app:
             if interaction.message and interaction.message.embeds:
@@ -1119,6 +1243,23 @@ class ForumApplicationView(ui.View):
             print(f"[ForumView] Błąd followup odrzucenia: {e}")
 
         try:
+            from utils.helpers import send_audit_log
+            await send_audit_log(
+                client=interaction.client,
+                guild=interaction.guild,
+                title=f"Wniosek #{self.app_id} ODRZUCONY",
+                description=f"Wniosek **{app.get('type', 'Nieznany')}** został odrzucony przez {interaction.user.mention}.",
+                color=0xe74c3c,
+                fields=[
+                    ("Typ wniosku", app.get('type', 'Nieznany'), True),
+                    ("Odrzucający", f"{interaction.user} (`{interaction.user.id}`)", True),
+                    ("Klub / Zawodnik", f"{app.get('club_tag') or app.get('target_club') or '-'} / {app.get('player_name') or '-'}", True),
+                ]
+            )
+        except Exception as e:
+            print(f"[Audit] Błąd logowania odrzucenia wniosku: {e}")
+
+        try:
             await self._archive_thread(interaction.channel)
         except Exception as e:
             print(f"[ForumView] Błąd archiwizacji wątku: {e}")
@@ -1129,14 +1270,22 @@ class ForumApplicationView(ui.View):
         if not app: return embed
         lines = []
         
-        # ── Zawodnik ──
+        # ── Zawodnicy ──
         if app.get("needs_player_agree"):
+            p_prefix = "• Zawodnik A: " if app.get("type") == "WYMIANA" else "• Zawodnik: "
             if app.get("player_discord_id"):
-                lines.append(f"• Zawodnik: {'✅ Zgoda udzielona' if app.get('player_agreed') else '⏳ Oczekuje zgody'}")
+                lines.append(f"{p_prefix}{'✅ Zgoda udzielona' if app.get('player_agreed') else '⏳ Oczekuje zgody'}")
             else:
-                lines.append("• Zawodnik: ℹ️ Brak konta Discord (Powiadomienie)")
-        elif app.get("player_discord_id"):
-            pass
+                lines.append(f"{p_prefix}ℹ️ Brak konta Discord (Powiadomienie)")
+
+        if app.get("type") == "WYMIANA":
+            enc_b = app.get("new_founder_txt", "")
+            if enc_b and enc_b.startswith("WYMIANA|"):
+                parts = enc_b.split("|")
+                dc_b_str = parts[2] if len(parts) > 2 else ""
+                if dc_b_str.isdigit():
+                    b_agreed = (app.get("new_board_txt") == "AGREED")
+                    lines.append(f"• Zawodnik B: {'✅ Zgoda udzielona' if b_agreed else '⏳ Oczekuje zgody'}")
 
         # ── Target Club ──
         target = app.get("target_club", "")
@@ -1167,11 +1316,20 @@ class ForumApplicationView(ui.View):
         return embed
 
     async def _archive_thread(self, channel):
-        if isinstance(channel, discord.Thread):
+        if channel and (isinstance(channel, discord.Thread) or hasattr(channel, "edit")):
             try:
-                await channel.edit(locked=True, archived=True)
+                res = channel.edit(locked=True, archived=True)
+                if inspect.isawaitable(res):
+                    await res
             except Exception as e:
                 print(f"[ForumView] Błąd archiwizacji wątku: {e}")
+
+
+async def fed_auto_accept(app_id: int, client, guild, thread_msg, user) -> bool:
+    """Modułowy helper do natychmiastowego zatwierdzenia wniosku przez federację."""
+    view = ForumApplicationView(app_id)
+    return await view.fed_auto_accept(client, guild, thread_msg, user)
+
 
 def clean_tag(tag: str) -> str:
     if not tag: return ""

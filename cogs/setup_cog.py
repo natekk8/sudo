@@ -67,7 +67,8 @@ def _build_panel_embed() -> discord.Embed:
     # ── Sekcja: Kanały ────────────────────────────────────────────────────────
     embed.add_field(name="📢  Kanały", value=(
         f"> **Forum:** `{cfg.channel_forum_id() or 'nie ustawiony'}`\n"
-        f"> **Komunikaty:** `{cfg.channel_komunikaty_id() or 'nie ustawiony'}`"
+        f"> **Komunikaty:** `{cfg.channel_komunikaty_id() or 'nie ustawiony'}`\n"
+        f"> **Audyt:** `{cfg.channel_audit_id() or 'nie ustawiony'}`"
     ), inline=True)
 
     # ── Sekcja: Role ──────────────────────────────────────────────────────────
@@ -86,6 +87,14 @@ def _build_panel_embed() -> discord.Embed:
     if not open_at and not close_at:
         rynek_lines.append("> **Harmonogram:** brak zaplanowanych zmian")
     embed.add_field(name="🔄  Rynek Transferowy", value="\n".join(rynek_lines), inline=False)
+
+    # ── Sekcja: Statystyki Bazy Danych ─────────────────────────────────────────
+    stats = database.get_league_stats()
+    embed.add_field(name="📊  Statystyki Bazy Danych", value=(
+        f"> **Kluby:** `{stats.get('clubs', 0)}`  •  **Zawodnicy w kadrach:** `{stats.get('players', 0)}`\n"
+        f"> **Lista transferowa:** `{stats.get('transfer_list', 0)}` na sprzedaż  •  **Wolni agenci:** `{stats.get('free_agents', 0)}`\n"
+        f"> **Oczekujące wnioski:** `{stats.get('pending_applications', 0)}`"
+    ), inline=False)
 
     embed.set_footer(text=f"{cfg.league_name()} | /setup <kategoria> <opcja>")
     return embed
@@ -246,6 +255,19 @@ class SetupCog(commands.Cog):
                 if not ch: return await interaction.response.send_message(f"❌ Kanał `{cid}` nie istnieje na serwerze.", ephemeral=True)
                 cfg.set_config("cfg_channel_komunikaty", str(cid))
                 await interaction.response.send_message(embed=_ok(f"Kanał komunikatów: {ch.mention}"), ephemeral=True)
+            except ValueError:
+                await interaction.response.send_message("❌ Wpisz samo ID (same cyfry).", ephemeral=True)
+
+        @kanal.command(name="audyt", description="Ustaw ID kanału dedykowanego audytu zdarzeń i operacji ligi")
+        @app_commands.describe(id_kanalu="ID kanału Discord (PPM → Kopiuj ID)")
+        async def slash_kanal_audyt(interaction: discord.Interaction, id_kanalu: str):
+            if not _is_admin(interaction.user): return await interaction.response.send_message("❌ Brak uprawnień.", ephemeral=True)
+            try:
+                cid = int(id_kanalu)
+                ch = interaction.guild.get_channel(cid)
+                if not ch: return await interaction.response.send_message(f"❌ Kanał `{cid}` nie istnieje na serwerze.", ephemeral=True)
+                cfg.set_config("cfg_channel_audit", str(cid))
+                await interaction.response.send_message(embed=_ok(f"Kanał audytu: {ch.mention}"), ephemeral=True)
             except ValueError:
                 await interaction.response.send_message("❌ Wpisz samo ID (same cyfry).", ephemeral=True)
 

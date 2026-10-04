@@ -28,3 +28,9 @@ def get_player_transfer_history(player_name: str, player_discord_id: int = None)
                 ORDER BY date DESC LIMIT 10
             """, (player_name,))
         return [dict(r) for r in cursor.fetchall()]
+
+def get_all_transfer_history() -> list:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM transfer_history ORDER BY id DESC")
+        return [dict(r) for r in cursor.fetchall()]

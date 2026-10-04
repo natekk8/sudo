@@ -5,12 +5,11 @@ import database
 from config import CHANNEL_KOMUNIKATY_ID
 from utils.helpers import send_dm, get_now_warsaw, get_or_fetch_member, get_komunikaty_channel, format_schedule_discord
 
+
 def setup_expirations_task(bot: discord.Client, guild_id: int = None):
+    last_fa_cleanup = [datetime.min]
 
-    @tasks.loop(seconds=30)
-    async def check_expirations():
-        await bot.wait_until_ready()
-
+    async def _run_expiration_cycle():
         if guild_id:
             guild = bot.get_guild(guild_id)
         else:
@@ -65,12 +64,58 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
         except Exception as e:
             print(f"[Expirations] Błąd sprawdzania harmonogramu rynku: {e}")
 
-        players = database.get_all_players()
+        players = database.get_expiring_or_overflow_players()
+        clubs_map = {c["tag"].upper(): c for c in database.get_all_clubs()}
 
         # ── 1. Sprawdzanie wygaśnięć kontraktów i przypomnień per gracz ──
         for player in players:
             try:
                 expires_at_str = player.get("expires_at")
+                gracz_name = player.get("name")
+                typ = player.get("contract_type")
+                klub_obecny = player.get("club_tag")
+                klub_macierzysty = player.get("parent_club_tag") or klub_obecny
+                dc_id = player.get("discord_id")
+                c_obecny = clubs_map.get((klub_obecny or "").upper())
+                c_macierz = clubs_map.get((klub_macierzysty or "").upper())
+                rep_id = c_obecny.get("reprezentant_dc") if c_obecny else None
+
+                # ── SPRAWDZANIE ZASADY 4. ZAWODNIKA (IS_OVERFLOW) ──
+                if player.get("is_overflow") == 1 and player.get("slot_deadline"):
+                    try:
+                        deadline_dt = datetime.strptime(player.get("slot_deadline"), "%Y-%m-%d %H:%M:%S")
+                        if now >= deadline_dt:
+                            member = await get_or_fetch_member(guild, dc_id) if dc_id else None
+                            if member and c_obecny:
+                                r_zaw = guild.get_role(c_obecny.get("role_player_id", 0))
+                                if r_zaw:
+                                    try:
+                                        await member.remove_roles(r_zaw)
+                                    except Exception as e:
+                                        print(f"[Expirations] Błąd usunięcia roli overflow: {e}")
+
+                            database.delete_player(gracz_name)
+                            if dc_id:
+                                database.register_free_agent(dc_id, gracz_name, "UNI", "ALL")
+
+                            database.add_transfer_history(
+                                player_name=gracz_name, player_discord_id=dc_id,
+                                from_club=klub_obecny, to_club=None,
+                                transfer_type="PRZEKROCZENIE_LIMITU_REZERWA", amount=None
+                            )
+
+                            if kom_channel:
+                                klub_nazwa = c_obecny.get("name", klub_obecny) if c_obecny else klub_obecny
+                                await kom_channel.send(
+                                    f"🚨 **KARA ZA PRZEKROCZENIE LIMITU!**\n"
+                                    f"> Klub **{klub_nazwa}** (`{klub_obecny}`) nie zwolnił miejsca w kadrze w ciągu 5 dni.\n"
+                                    f"> Zawodnik **{gracz_name}** został odebrany i przeniesiony na **Giełdę Wolnych Agentów** (utrata statusu transferowego).",
+                                    allowed_mentions=discord.AllowedMentions.none()
+                                )
+                            continue  # Gracz wyrzucony, nie przetwarzaj dalej kontraktu
+                    except ValueError:
+                        pass
+
                 if not expires_at_str:
                     continue
 
@@ -78,15 +123,6 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                     expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
                 except ValueError:
                     continue
-
-                gracz_name = player.get("name")
-                typ = player.get("contract_type")
-                klub_obecny = player.get("club_tag")
-                klub_macierzysty = player.get("parent_club_tag") or klub_obecny
-                dc_id = player.get("discord_id")
-                c_obecny = database.get_club(klub_obecny)
-                c_macierz = database.get_club(klub_macierzysty)
-                rep_id = c_obecny.get("reprezentant_dc") if c_obecny else None
 
                 dni_do_konca = (expires_at - now).total_seconds() / 86400.0
 
@@ -103,8 +139,10 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                         f"> Przedłuż umowę wnioskiem (Aneks), aby gracz nie stał się wolnym agentem.\n"
                         f"> Termin wygaśnięcia: `{expires_at_str}`"
                     )
-                    try: await _send_warning(bot, dc_id, rep_id, msg)
-                    except Exception as e: print(f"Błąd DM do {gracz_name}: {e}")
+                    try:
+                        await _send_warning(bot, dc_id, rep_id, msg)
+                    except Exception as e:
+                        print(f"Błąd DM do {gracz_name}: {e}")
                     database.set_player_warning_flag(gracz_name, "warned_7d")
 
                 # 3 dni przed wygaśnięciem
@@ -114,8 +152,10 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                         f"w klubie **{klub_nazwa}** (`{klub_obecny}`) wygasa niedługo!\n"
                         f"> Termin wygaśnięcia: `{expires_at_str}`"
                     )
-                    try: await _send_warning(bot, dc_id, rep_id, msg)
-                    except Exception as e: print(f"Błąd DM do {gracz_name}: {e}")
+                    try:
+                        await _send_warning(bot, dc_id, rep_id, msg)
+                    except Exception as e:
+                        print(f"Błąd DM do {gracz_name}: {e}")
                     database.set_player_warning_flag(gracz_name, "warned_3d")
 
                 # 1 dzień przed wygaśnięciem
@@ -125,43 +165,11 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                         f"w klubie **{klub_nazwa}** (`{klub_obecny}`) wygasa jutro!\n"
                         f"> Termin wygaśnięcia: `{expires_at_str}`"
                     )
-                    try: await _send_warning(bot, dc_id, rep_id, msg)
-                    except Exception as e: print(f"Błąd DM do {gracz_name}: {e}")
-                    database.set_player_warning_flag(gracz_name, "warned_1d")
-
-                # ── SPRAWDZANIE ZASADY 4. ZAWODNIKA (IS_OVERFLOW) ──
-                if player.get("is_overflow") == 1 and player.get("slot_deadline"):
                     try:
-                        deadline_dt = datetime.strptime(player.get("slot_deadline"), "%Y-%m-%d %H:%M:%S")
-                        if now >= deadline_dt:
-                            member = await get_or_fetch_member(guild, dc_id) if dc_id else None
-                            if member and c_obecny:
-                                r_zaw = guild.get_role(c_obecny.get("role_player_id", 0))
-                                if r_zaw:
-                                    try: await member.remove_roles(r_zaw)
-                                    except Exception as e: print(f"[Expirations] Błąd usunięcia roli overflow: {e}")
-                            
-                            database.delete_player(gracz_name)
-                            if dc_id:
-                                # Wyrzucenie do bazy rezerwowej
-                                database.register_free_agent(dc_id, gracz_name, "UNI", "ALL")
-                            
-                            database.add_transfer_history(
-                                player_name=gracz_name, player_discord_id=dc_id,
-                                from_club=klub_obecny, to_club=None,
-                                transfer_type="PRZEKROCZENIE_LIMITU_REZERWA", amount=None
-                            )
-                            
-                            if kom_channel:
-                                await kom_channel.send(
-                                    f"🚨 **KARA ZA PRZEKROCZENIE LIMITU!**\n"
-                                    f"> Klub **{klub_nazwa}** (`{klub_obecny}`) nie zwolnił miejsca w kadrze w ciągu 5 dni.\n"
-                                    f"> Zawodnik **{gracz_name}** został odebrany i przeniesiony do **Bazy Rezerwowej** (utrata statusu transferowego).",
-                                    allowed_mentions=discord.AllowedMentions.none()
-                                )
-                            continue  # Gracz wyrzucony, nie przetwarzaj dalej kontraktu
-                    except ValueError:
-                        pass
+                        await _send_warning(bot, dc_id, rep_id, msg)
+                    except Exception as e:
+                        print(f"Błąd DM do {gracz_name}: {e}")
+                    database.set_player_warning_flag(gracz_name, "warned_1d")
 
                 # ── Wygaśnięcie umowy ──
                 if now >= expires_at:
@@ -173,13 +181,17 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                             if c_obecny:
                                 r_temp = guild.get_role(c_obecny.get("role_player_id", 0))
                                 if r_temp:
-                                    try: await member.remove_roles(r_temp)
-                                    except Exception as e: print(f"[Expirations] Błąd usunięcia roli: {e}")
+                                    try:
+                                        await member.remove_roles(r_temp)
+                                    except Exception as e:
+                                        print(f"[Expirations] Błąd usunięcia roli: {e}")
                             if c_macierz:
                                 r_mac = guild.get_role(c_macierz.get("role_player_id", 0))
                                 if r_mac:
-                                    try: await member.add_roles(r_mac)
-                                    except Exception as e: print(f"[Expirations] Błąd nadania roli macierzystej: {e}")
+                                    try:
+                                        await member.add_roles(r_mac)
+                                    except Exception as e:
+                                        print(f"[Expirations] Błąd nadania roli macierzystej: {e}")
 
                         # Przywrócenie oryginalnego kontraktu i klauzuli macierzystej
                         parent_expires = player.get("parent_contract_expires_at")
@@ -222,10 +234,14 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                         if member and c_obecny:
                             r_zaw = guild.get_role(c_obecny.get("role_player_id", 0))
                             if r_zaw:
-                                try: await member.remove_roles(r_zaw)
-                                except Exception as e: print(f"[Expirations] Błąd usunięcia roli przy wygaśnięciu: {e}")
+                                try:
+                                    await member.remove_roles(r_zaw)
+                                except Exception as e:
+                                    print(f"[Expirations] Błąd usunięcia roli przy wygaśnięciu: {e}")
 
                         database.delete_player(gracz_name)
+                        if dc_id:
+                            database.register_free_agent(dc_id, gracz_name, "UNI", "ALL")
                         database.add_transfer_history(
                             player_name=gracz_name, player_discord_id=dc_id,
                             from_club=klub_obecny, to_club=None,
@@ -238,7 +254,7 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                                 f"📢 **WYGAŚNIĘCIE KONTRAKTU!**\n"
                                 f"> Kontrakt zawodnika **{gracz_name}** z drużyną **{nazwa_klub}** "
                                 f"(`{klub_obecny}`) dobiegł końca.\n"
-                                f"> Zawodnik staje się wolnym agentem!",
+                                f"> Zawodnik staje się wolnym agentem i trafia na giełdę (**Szukam Zawodnika**)!",
                                 allowed_mentions=discord.AllowedMentions.none()
                             )
 
@@ -246,26 +262,36 @@ def setup_expirations_task(bot: discord.Client, guild_id: int = None):
                             await send_dm(
                                 bot, dc_id,
                                 f"📢 **Twój kontrakt z klubem `{klub_obecny}` wygasł.**\n"
-                                f"Jesteś teraz wolnym agentem! Kliknij przycisk **Szukam Klubu** "
-                                f"w panelu rynku transferowego, jeśli szukasz nowego klubu."
+                                f"Jesteś teraz wolnym agentem – widzisz się na liście w panelu rynku "
+                                f"(**Szukam Zawodnika**), a kluby mogą Cię zakontraktować."
                             )
 
             except Exception as e:
                 print(f"[Expirations] Błąd przetwarzania gracza {player.get('name')}: {e}")
 
-        # ── 2. Czyszczenie nieaktywnych ogłoszeń na Giełdzie Wolnych Agentów (po 14 dniach) ──
+        # ── 2. Czyszczenie nieaktywnych ogłoszeń na Giełdzie Wolnych Agentów (co 6 godzin, po 14 dniach) ──
+        if (now - last_fa_cleanup[0]).total_seconds() >= 21600:
+            last_fa_cleanup[0] = now
+            try:
+                removed = database.cleanup_expired_free_agents(days=14)
+                for fa in removed:
+                    dc_id = fa.get("discord_id")
+                    if dc_id:
+                        await send_dm(
+                            bot, dc_id,
+                            "ℹ️ Twoje ogłoszenie na Giełdzie Wolnych Agentów wygasło z powodu braku odświeżenia przez 14 dni.\n"
+                            "Jeśli nadal szukasz klubu, zgłoś się do wybranego klubu lub zarządu ligi w celu podpisania kontraktu."
+                        )
+            except Exception as e:
+                print(f"[Expirations] Błąd czyszczenia giełdy: {e}")
+
+    @tasks.loop(seconds=60)
+    async def check_expirations():
+        await bot.wait_until_ready()
         try:
-            removed = database.cleanup_expired_free_agents(days=14)
-            for fa in removed:
-                dc_id = fa.get("discord_id")
-                if dc_id:
-                    await send_dm(
-                        bot, dc_id,
-                        "ℹ️ Twoje ogłoszenie na Giełdzie Wolnych Agentów wygasło z powodu braku odświeżenia przez 14 dni.\n"
-                        "Jeśli nadal szukasz klubu, kliknij przycisk **Szukam Klubu** na rynku transferowym."
-                    )
-        except Exception as e:
-            print(f"[Expirations] Błąd czyszczenia giełdy: {e}")
+            await _run_expiration_cycle()
+        except Exception as loop_err:
+            print(f"[Expirations] Błąd krytyczny w cyklu check_expirations: {loop_err}")
 
     @check_expirations.error
     async def on_expiration_error(error):
