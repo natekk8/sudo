@@ -216,6 +216,71 @@ class TestNewFeatures(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(overwrites[guild.me].view_channel)
         self.assertTrue(overwrites[guild.me].send_messages)
 
+    def test_extract_ids_handles_mentions_and_numeric_ids(self):
+        from utils.helpers import extract_ids
+        txt1 = "Właściciel: <@111222333444555666> oraz <@!999888777666555444>"
+        self.assertEqual(extract_ids(txt1), [111222333444555666, 999888777666555444])
+
+        txt2 = "Zarząd: 111222333444555666 i tekst 999888777666555444"
+        self.assertEqual(extract_ids(txt2), [111222333444555666, 999888777666555444])
+
+        txt3 = "Brak osób, same słowa i mała liczba 12345"
+        self.assertEqual(extract_ids(txt3), [])
+
+    def test_update_club_full_clearing_board_and_rep(self):
+        database.add_club("LEG", "Legia Warszawa", role_board_id=222, role_player_id=333,
+                          reprezentant_dc=111, founder_txt="Jan", board_txt="Piotr", board_ids=[111, 222])
+        c1 = database.get_club("LEG")
+        self.assertEqual(c1["reprezentant_dc"], 111)
+        self.assertEqual(c1["board_ids"], [111, 222])
+
+        # Wyczyszczenie do pustego zarządu i braku reprezentanta
+        ok = database.update_club_full("LEG", new_board_ids=[], new_rep_id=None)
+        self.assertTrue(ok)
+
+        c2 = database.get_club("LEG")
+        self.assertIsNone(c2["reprezentant_dc"])
+        self.assertEqual(c2["board_ids"], [])
+
+    async def test_update_club_board_data_command_flow(self):
+        from cogs.market import _update_club_board_data
+        database.add_club("WIS", "Wisła Kraków", role_board_id=202, role_player_id=303,
+                          reprezentant_dc=101, founder_txt="Oryginalny", board_txt="StaryZarzad", board_ids=[101, 202])
+        database.add_or_update_player("Kapitan", 999, "WIS", "WIS", "5000", "TRANSFER", expires_at=None)
+
+        # 1. Podgląd zarządu bez argumentów
+        mock_admin = MagicMock()
+        mock_admin.id = 777
+        mock_admin.guild_permissions.administrator = True
+        mock_guild = MagicMock()
+        mock_guild.get_role.return_value = None
+        mock_guild.get_channel.return_value = None
+
+        ok, msg, embed = await _update_club_board_data(mock_guild, mock_admin, "WIS", None, None)
+        self.assertTrue(ok)
+        self.assertIsNotNone(embed)
+        self.assertIn("Władze Klubu: Wisła Kraków", embed.title)
+
+        # 2. Zmiana właściciela i zarządu na nowe osoby
+        ok, msg, embed = await _update_club_board_data(mock_guild, mock_admin, "WIS", "<@555666777888999000>", "999888777666555444")
+        self.assertTrue(ok)
+        c_mod = database.get_club("WIS")
+        self.assertEqual(c_mod["reprezentant_dc"], 555666777888999000)
+        self.assertIn(555666777888999000, c_mod["board_ids"])
+        self.assertIn(999888777666555444, c_mod["board_ids"])
+
+        # 3. Wyczyszczenie zarządu i reprezentanta słowem "brak"
+        ok, msg, embed = await _update_club_board_data(mock_guild, mock_admin, "WIS", "brak", "usun")
+        self.assertTrue(ok)
+        c_cleared = database.get_club("WIS")
+        self.assertIsNone(c_cleared["reprezentant_dc"])
+        self.assertEqual(c_cleared["board_ids"], [])
+
+        # 4. Sprawdzenie, czy kontrakt i gracz nie zostały w żaden sposób naruszone
+        player = database.get_player_by_discord_id(999)
+        self.assertIsNotNone(player)
+        self.assertEqual(player["club_tag"], "WIS")
+
 
 if __name__ == '__main__':
     unittest.main()

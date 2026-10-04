@@ -541,10 +541,10 @@ class ForumApplicationView(ui.View):
 
             founder_ids = extract_ids(app.get("founder_txt", ""))
             board_ids = extract_ids(app.get("board_txt", ""))
-            # Rolę zarządu otrzymują WYŁĄCZNIE osoby wpisane we wniosku (właściciel + zarząd).
-            # Osoba otwierająca ticket (np. członek Zarządu Federacji) NIE otrzymuje roli, chyba że została wymieniona w zarządzie.
+            # Rolę zarządu i reprezentanta otrzymują WYŁĄCZNIE osoby wpisane we wniosku (właściciel + zarząd).
+            # Wnioskodawca (np. Zarząd Federacji / Administrator składający wniosek dla kogoś) NIE staje się reprezentantem.
             osoby = set(founder_ids + board_ids)
-            rep_id = founder_ids[0] if founder_ids else (board_ids[0] if board_ids else app.get("applicant_id"))
+            rep_id = founder_ids[0] if founder_ids else (board_ids[0] if board_ids else None)
 
             for uid in osoby:
                 m = await get_or_fetch_member(guild, uid)
@@ -1001,8 +1001,28 @@ class ForumApplicationView(ui.View):
 
             new_owner_ids = extract_ids(new_founder_txt) if new_founder_txt else []
             new_board_extracted = extract_ids(new_board_txt) if new_board_txt else []
-            all_new_board_ids = set(new_owner_ids + new_board_extracted)
-            rep_id = new_owner_ids[0] if new_owner_ids else (c_old.get("reprezentant_dc") if c_old else None)
+
+            change_owner = bool(new_founder_txt and new_founder_txt.lower() != "bez zmian")
+            change_board = bool(new_board_txt and new_board_txt.lower() != "bez zmian")
+
+            if change_owner:
+                rep_id = new_owner_ids[0] if new_owner_ids else None
+                owner_pool = new_owner_ids
+            else:
+                rep_id = database.clubs._UNSET
+                owner_pool = extract_ids(c_old.get("founder_txt", "") if c_old else "")
+
+            if change_board:
+                board_pool = new_board_extracted
+            else:
+                board_pool = extract_ids(c_old.get("board_txt", "") if c_old else "")
+
+            if change_owner or change_board:
+                all_new_board_ids = set(owner_pool + board_pool)
+                pass_board_ids = list(all_new_board_ids)
+            else:
+                all_new_board_ids = set(c_old.get("board_ids", [])) if c_old else set()
+                pass_board_ids = database.clubs._UNSET
 
             database.update_club_full(
                 old_tag=old_tag,
@@ -1010,7 +1030,7 @@ class ForumApplicationView(ui.View):
                 new_name=new_name,
                 new_founder_txt=new_founder_txt,
                 new_board_txt=new_board_txt,
-                new_board_ids=list(all_new_board_ids) if all_new_board_ids else None,
+                new_board_ids=pass_board_ids,
                 new_rep_id=rep_id
             )
 
@@ -1026,7 +1046,7 @@ class ForumApplicationView(ui.View):
                     except Exception as e: print(f"[Fed] Błąd rebrand roli zawodnika: {e}")
 
                 # Jeśli podano nowe władze (właściciel lub zarząd), zaktualizuj przypisanie ról na serwerze!
-                if r_board and (new_founder_txt or new_board_txt):
+                if r_board and (change_owner or change_board):
                     old_ids = set(c_old.get("board_ids", []))
                     if c_old.get("reprezentant_dc"):
                         old_ids.add(c_old["reprezentant_dc"])

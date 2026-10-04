@@ -37,7 +37,10 @@ def is_valid_tag(tag: str) -> bool:
 
 def extract_ids(text: str) -> list:
     if not text: return []
-    return [int(uid) for uid in re.findall(r'<@!?(\d+)>', text)]
+    mentions = re.findall(r'<@!?(\d+)>', str(text))
+    raw_ids = re.findall(r'\b\d{17,20}\b', str(text))
+    combined = list(dict.fromkeys(mentions + raw_ids))
+    return [int(uid) for uid in combined]
 
 def safe_thread_name(name: str) -> str:
     return name[:100]

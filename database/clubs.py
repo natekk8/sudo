@@ -43,9 +43,11 @@ def get_all_clubs() -> list:
             result.append(d)
         return result
 
+_UNSET = object()
+
 def update_club_full(old_tag: str, new_tag: str = None, new_name: str = None,
                      new_founder_txt: str = None, new_board_txt: str = None,
-                     new_board_ids: list = None, new_rep_id: int = None):
+                     new_board_ids = _UNSET, new_rep_id = _UNSET):
     old_tag = old_tag.strip().upper()
     new_tag = new_tag.strip().upper() if new_tag else old_tag
     with _lock:
@@ -59,8 +61,8 @@ def update_club_full(old_tag: str, new_tag: str = None, new_name: str = None,
             final_name = new_name.strip() if new_name and new_name.lower() != "bez zmian" else club["name"]
             final_founder = new_founder_txt.strip() if new_founder_txt and new_founder_txt.lower() != "bez zmian" else club["founder_txt"]
             final_board_txt = new_board_txt.strip() if new_board_txt and new_board_txt.lower() != "bez zmian" else club["board_txt"]
-            final_board_ids = json.dumps(new_board_ids) if new_board_ids is not None else club["board_ids"]
-            final_rep = new_rep_id if new_rep_id is not None else club["reprezentant_dc"]
+            final_board_ids = json.dumps(new_board_ids or []) if new_board_ids is not _UNSET else club["board_ids"]
+            final_rep = new_rep_id if new_rep_id is not _UNSET else club["reprezentant_dc"]
 
             cursor.execute("""
                 UPDATE clubs SET
